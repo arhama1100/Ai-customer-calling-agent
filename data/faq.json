@@ -1,0 +1,38 @@
+{
+  "_meta": {
+    "status": "DRAFT — PENDING OWNER APPROVAL",
+    "note": "These answers are placeholders created during project scaffolding. The shop owner must review and approve the exact wording before this file is treated as the approved knowledge base. This file (data/faq.json) is the ONLY source of truth for policy answers."
+  },
+  "topics": [
+    {
+      "id": "shipping",
+      "title": "Shipping",
+      "keywords": ["shipping", "ship", "delivery", "deliver", "how long", "arrive"],
+      "answer": "We ship within 1-2 business days. Standard delivery takes 3-5 business days, and express delivery takes 1-2 business days."
+    },
+    {
+      "id": "returns",
+      "title": "Returns & Refunds",
+      "keywords": ["return", "returns", "refund", "money back", "exchange", "return policy"],
+      "answer": "Unopened items can be returned within 30 days for a full refund. Refunds are processed to the original payment method within 5 business days after we receive the item."
+    },
+    {
+      "id": "cancellation",
+      "title": "Order Cancellation",
+      "keywords": ["cancel", "cancellation", "cancel my order"],
+      "answer": "Orders can be cancelled any time before they are shipped. Once an order shows as shipped, it can no longer be cancelled, but it can be returned after delivery."
+    },
+    {
+      "id": "changes",
+      "title": "Changing an Order",
+      "keywords": ["change", "modify", "edit my order", "wrong address", "update address"],
+      "answer": "Order changes and address updates are possible while the order is still in 'pending' or 'processing' status. After that, please contact support."
+    },
+    {
+      "id": "payment",
+      "title": "Payment Methods",
+      "keywords": ["payment", "pay", "card", "credit", "method"],
+      "answer": "We accept all major credit cards and digital wallets. Payment is captured when the order is placed."
+    }
+  ]
+}

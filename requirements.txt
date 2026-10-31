@@ -1,0 +1,8 @@
+flask
+python-dotenv
+pytest
+
+# Official Gemini SDK (OPTIONAL feature, disabled by default). Installed in the
+# project venv and verified to import on Python 3.14; used only when
+# GEMINI_ENABLED=true and a GEMINI_API_KEY is present (see app/gemini.py).
+google-genai

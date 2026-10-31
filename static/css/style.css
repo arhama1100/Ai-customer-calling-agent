@@ -1,0 +1,452 @@
+/*
+  static/css/style.css
+  ─────────────────────
+  Blue-and-white theme for the Shop Support Assistant.
+  Plain hand-written CSS (no framework). Grouped top-to-bottom to match the
+  page: base → layout → bubbles → typing → composer → controls → status →
+  responsive. Beginner-friendly: one concern per block.
+*/
+
+/* ── Base / theme tokens ── */
+:root {
+  --blue-700: #1d4ed8;
+  --blue-600: #2563eb;
+  --blue-500: #3b82f6;
+  --blue-100: #dbeafe;
+  --blue-050: #eff6ff;
+  --ink: #0f172a;
+  --muted: #64748b;
+  --white: #ffffff;
+  --line: #e2e8f0;
+  --shadow: 0 10px 30px rgba(37, 99, 235, 0.12);
+  --radius: 14px;
+}
+
+* {
+  box-sizing: border-box;
+}
+
+body {
+  margin: 0;
+  font-family: "Segoe UI", system-ui, -apple-system, Arial, sans-serif;
+  color: var(--ink);
+  background: linear-gradient(160deg, var(--blue-050), #f8fafc 55%, #eef2ff);
+  min-height: 100vh;
+}
+
+/* ── Page layout ── */
+.page {
+  max-width: 720px;
+  margin: 0 auto;
+  padding: 20px 16px 32px;
+  display: flex;
+  flex-direction: column;
+  gap: 16px;
+}
+
+.topbar {
+  display: flex;
+  align-items: center;
+}
+
+.brand {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+}
+
+.brand-icon {
+  font-size: 1.9rem;
+  width: 48px;
+  height: 48px;
+  display: grid;
+  place-items: center;
+  border-radius: 12px;
+  background: var(--blue-600);
+  color: var(--white);
+  box-shadow: var(--shadow);
+}
+
+.brand-text h1 {
+  margin: 0;
+  font-size: 1.3rem;
+  line-height: 1.2;
+}
+
+.tagline {
+  margin: 2px 0 0;
+  font-size: 0.85rem;
+  color: var(--muted);
+}
+
+/* ── Chat card ── */
+.chat-card {
+  background: var(--white);
+  border: 1px solid var(--line);
+  border-radius: var(--radius);
+  box-shadow: var(--shadow);
+  padding: 16px;
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+
+/* ── Conversation log + bubbles ── */
+.log {
+  border: 1px solid var(--line);
+  border-radius: 12px;
+  background: #f8fafc;
+  padding: 14px;
+  height: 380px;
+  overflow-y: auto;
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+
+.msg {
+  max-width: 82%;
+  padding: 10px 14px;
+  border-radius: 16px;
+  line-height: 1.4;
+  font-size: 0.95rem;
+  white-space: pre-wrap;
+  word-wrap: break-word;
+  animation: pop 0.15s ease-out;
+}
+
+.msg.user {
+  align-self: flex-end;
+  background: var(--blue-600);
+  color: var(--white);
+  border-bottom-right-radius: 5px;
+}
+
+.msg.bot {
+  align-self: flex-start;
+  background: var(--blue-100);
+  color: var(--ink);
+  border-bottom-left-radius: 5px;
+}
+
+/* Per-reply actions (the Speak button under assistant bubbles) */
+.msg-actions {
+  margin-top: 6px;
+}
+
+.speak-btn {
+  border: 1px solid var(--blue-500);
+  background: var(--white);
+  color: var(--blue-700);
+  border-radius: 999px;
+  padding: 3px 10px;
+  font-size: 0.78rem;
+  cursor: pointer;
+  transition: background 0.15s, color 0.15s;
+}
+
+.speak-btn:hover {
+  background: var(--blue-600);
+  color: var(--white);
+}
+
+/* Active state: this reply is currently speaking -> shows "Stop Speaking" */
+.speak-btn.speaking {
+  background: var(--blue-600);
+  color: var(--white);
+  border-color: var(--blue-700);
+}
+
+@keyframes pop {
+  from {
+    transform: translateY(6px);
+    opacity: 0;
+  }
+  to {
+    transform: translateY(0);
+    opacity: 1;
+  }
+}
+
+/* ── Typing / loading indicator (three bouncing dots) ── */
+.typing {
+  align-self: flex-start;
+  display: inline-flex;
+  gap: 5px;
+  padding: 4px 6px;
+}
+
+/* Explicitly honor the `hidden` attribute: the display rule above would
+   otherwise override the browser's default [hidden] { display: none }. */
+.typing[hidden] {
+  display: none;
+}
+
+.typing .dot {
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  background: var(--blue-500);
+  animation: blink 1.2s infinite ease-in-out both;
+}
+
+.typing .dot:nth-child(2) {
+  animation-delay: 0.2s;
+}
+
+.typing .dot:nth-child(3) {
+  animation-delay: 0.4s;
+}
+
+@keyframes blink {
+  0%,
+  80%,
+  100% {
+    opacity: 0.25;
+    transform: scale(0.8);
+  }
+  40% {
+    opacity: 1;
+    transform: scale(1);
+  }
+}
+
+/* ── Composer (input row) ── */
+.composer {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+#message {
+  flex: 1 1 auto;
+  min-width: 0;
+  padding: 12px 14px;
+  border: 1px solid var(--line);
+  border-radius: 999px;
+  font-size: 1rem;
+  outline: none;
+  transition: border-color 0.15s, box-shadow 0.15s;
+}
+
+#message:focus {
+  border-color: var(--blue-500);
+  box-shadow: 0 0 0 3px var(--blue-100);
+}
+
+.icon-btn,
+.send-btn {
+  border: none;
+  cursor: pointer;
+  font-size: 1rem;
+  transition: transform 0.05s, background 0.15s, opacity 0.15s;
+}
+
+.icon-btn {
+  width: 44px;
+  height: 44px;
+  flex: 0 0 auto;
+  border-radius: 50%;
+  background: var(--blue-050);
+  border: 1px solid var(--line);
+  font-size: 1.2rem;
+}
+
+.icon-btn:hover {
+  background: var(--blue-100);
+}
+
+/* Listening state, toggled by stt.js */
+.icon-btn.listening {
+  background: var(--blue-600);
+  color: var(--white);
+  border-color: var(--blue-700);
+  animation: pulse 1.2s infinite;
+}
+
+@keyframes pulse {
+  0% {
+    box-shadow: 0 0 0 0 rgba(37, 99, 235, 0.5);
+  }
+  70% {
+    box-shadow: 0 0 0 10px rgba(37, 99, 235, 0);
+  }
+  100% {
+    box-shadow: 0 0 0 0 rgba(37, 99, 235, 0);
+  }
+}
+
+.send-btn {
+  flex: 0 0 auto;
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 0 18px;
+  height: 44px;
+  border-radius: 999px;
+  background: var(--blue-600);
+  color: var(--white);
+  font-weight: 600;
+}
+
+.send-btn:hover {
+  background: var(--blue-700);
+}
+
+.send-ico {
+  font-size: 0.85rem;
+}
+
+/* Disabled (e.g. while a request is loading, or mic unsupported) */
+button:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+
+/* ── Secondary controls ── */
+.controls {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  flex-wrap: wrap;
+}
+
+.control {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.control-label {
+  font-size: 0.85rem;
+  color: var(--muted);
+}
+
+#stt-lang {
+  padding: 7px 10px;
+  border: 1px solid var(--line);
+  border-radius: 10px;
+  background: var(--white);
+  font-size: 0.9rem;
+  cursor: pointer;
+}
+
+#stt-lang:disabled {
+  cursor: not-allowed;
+  color: var(--muted);
+}
+
+/* TTS on/off switch */
+.switch {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  cursor: pointer;
+  user-select: none;
+}
+
+.switch input {
+  position: absolute;
+  opacity: 0;
+  width: 0;
+  height: 0;
+}
+
+.slider {
+  width: 40px;
+  height: 22px;
+  border-radius: 999px;
+  background: #cbd5e1;
+  position: relative;
+  transition: background 0.2s;
+}
+
+.slider::before {
+  content: "";
+  position: absolute;
+  top: 3px;
+  left: 3px;
+  width: 16px;
+  height: 16px;
+  border-radius: 50%;
+  background: var(--white);
+  transition: transform 0.2s;
+}
+
+.switch input:checked + .slider {
+  background: var(--blue-600);
+}
+
+.switch input:checked + .slider::before {
+  transform: translateX(18px);
+}
+
+.switch input:disabled + .slider {
+  opacity: 0.5;
+}
+
+.switch-label {
+  font-size: 0.85rem;
+  color: var(--muted);
+}
+
+/* Global "Stop Speaking" control (cancels speech immediately) */
+.stop-btn {
+  border: 1px solid var(--line);
+  background: var(--blue-050);
+  color: var(--ink);
+  border-radius: 999px;
+  padding: 6px 12px;
+  font-size: 0.82rem;
+  cursor: pointer;
+  transition: background 0.15s, color 0.15s;
+}
+
+.stop-btn:hover {
+  background: var(--blue-600);
+  color: var(--white);
+  border-color: var(--blue-700);
+}
+
+/* ── Status / error line ── */
+.status {
+  min-height: 1.2em;
+  margin: 0;
+  font-size: 0.85rem;
+  color: var(--muted);
+}
+
+.status.error {
+  color: #b91c1c;
+}
+
+/* ── Footer ─ */
+.foot {
+  text-align: center;
+  font-size: 0.78rem;
+  color: var(--muted);
+}
+
+/* ── Responsive: small screens ── */
+@media (max-width: 520px) {
+  .brand-text h1 {
+    font-size: 1.15rem;
+  }
+
+  .log {
+    height: 58vh;
+  }
+
+  .msg {
+    max-width: 90%;
+  }
+
+  .controls {
+    justify-content: flex-start;
+  }
+
+  .send-btn .send-ico {
+    display: none;
+  }
+}

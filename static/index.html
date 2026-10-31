@@ -1,0 +1,112 @@
+<!DOCTYPE html>
+<!--
+  static/index.html
+  ─────────────────
+  Chat page for the Shop Support Assistant.
+  Plain HTML/CSS/JS only (no framework). All element IDs below are relied on
+  by static/js/app.js, tts.js and stt.js — keep them if you edit the markup.
+
+  Textures of behavior:
+  - Text chat always works, even if voice (STT) or speech (TTS) is unavailable.
+  - The mic button and language <select> are enhanced by stt.js at runtime.
+-->
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>Shop Support Assistant</title>
+    <link rel="stylesheet" href="/static/css/style.css" />
+  </head>
+  <body>
+    <div class="page">
+      <!-- Header / brand -->
+      <header class="topbar">
+        <div class="brand">
+          <span class="brand-icon" aria-hidden="true">🎧</span>
+          <div class="brand-text">
+            <h1>Shop Support Assistant</h1>
+            <p class="tagline">Orders, shipping &amp; returns — by text or voice</p>
+          </div>
+        </div>
+      </header>
+
+      <!-- Chat card -->
+      <main class="chat-card">
+        <!-- Conversation log (bubbles are injected here by app.js) -->
+        <section id="log" class="log" aria-live="polite"></section>
+
+        <!-- Loading / typing indicator, toggled by app.js -->
+        <div id="typing" class="typing" hidden aria-hidden="true">
+          <span class="dot"></span>
+          <span class="dot"></span>
+          <span class="dot"></span>
+        </div>
+
+        <!-- Composer: mic + text input + send -->
+        <form id="chat-form" class="composer" autocomplete="off">
+          <button
+            id="mic-btn"
+            type="button"
+            class="icon-btn"
+            title="Speak your question"
+            aria-label="Voice input"
+          >
+            🎤
+          </button>
+          <input
+            id="message"
+            type="text"
+            autocomplete="off"
+            placeholder="Type your question… e.g. where is order ORD-1002?"
+            aria-label="Message"
+          />
+          <button id="send-btn" type="submit" class="send-btn">
+            Send<span class="send-ico" aria-hidden="true">➤</span>
+          </button>
+        </form>
+
+        <!-- Secondary controls: language + speak toggle -->
+        <div class="controls">
+          <label class="control">
+            <span class="control-label">Voice language</span>
+            <select
+              id="stt-lang"
+              title="Speech recognition language"
+              aria-label="Speech recognition language"
+            ></select>
+          </label>
+
+          <label class="switch" title="Read replies aloud">
+            <input id="speak-toggle" type="checkbox" checked />
+            <span class="slider" aria-hidden="true"></span>
+            <span class="switch-label">Speak replies</span>
+          </label>
+
+          <button
+            id="stop-speak"
+            type="button"
+            class="stop-btn"
+            title="Stop any speech right now"
+            aria-label="Stop speaking"
+          >
+            ⏹ Stop Speaking
+          </button>
+        </div>
+
+        <!-- Status / error line (also used by STT feedback) -->
+        <p id="status" class="status" role="status"></p>
+      </main>
+
+      <!-- Footer disclaimer -->
+      <footer class="foot">
+        Sample orders are fictional. Answers come only from the local database
+        and the FAQ — never invented.
+      </footer>
+    </div>
+
+    <!-- Scripts: tts + stt define their modules, then app.js wires the UI -->
+    <script src="/static/js/tts.js"></script>
+    <script src="/static/js/stt.js"></script>
+    <script src="/static/js/app.js"></script>
+  </body>
+</html>
