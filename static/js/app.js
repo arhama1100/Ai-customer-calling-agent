@@ -135,7 +135,19 @@ async function sendMessage(text) {
     });
 
     if (!response.ok) {
-      throw new Error(`server error (${response.status})`);
+      // The API returns consistent JSON errors (413 too long, 429 rate limited,
+      // 500, ...). Show the server's friendly message when present so the user
+      // gets real guidance instead of a bare status number.
+      let detail = `server error (${response.status})`;
+      try {
+        const errBody = await response.json();
+        if (errBody && typeof errBody.message === "string" && errBody.message.trim()) {
+          detail = errBody.message.trim();
+        }
+      } catch (parseErr) {
+        // Not JSON (e.g. a proxy error page) - keep the status-based detail.
+      }
+      throw new Error(detail);
     }
 
     const data = await response.json(); // {intent, reply, source}
@@ -153,9 +165,10 @@ async function sendMessage(text) {
       TTS.speak(data.reply, getPreferredLang());
     }
   } catch (err) {
-    // Honest error: never fake an assistant answer.
+    // Honest error: never fake an assistant answer. Covers a network failure
+    // AND API errors (the friendly message is thrown above for non-2xx replies).
     setBusy(false);
-    setStatus(`Could not reach the assistant: ${err.message}. You can still type.`, true);
+    setStatus(`The assistant could not answer just now: ${err.message}. You can still type.`, true);
   } finally {
     setBusy(false);
     inputEl.focus();

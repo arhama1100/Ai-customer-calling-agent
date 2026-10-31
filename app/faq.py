@@ -1,11 +1,13 @@
 """
 app/faq.py
 ──────────
-Knowledge-base lookup over the APPROVED FAQ file (data/faq.json).
+Knowledge-base lookup over the SAMPLE FAQ file (data/faq.json).
 
 Design rules:
 - faq.json is the ONLY source of truth for policy answers. Nothing here
-  invents an answer; it only selects an approved topic (or says none matched).
+  invents an answer; it only selects a sample topic (or says none matched).
+  The answers are FICTIONAL demonstration policies (see _meta in faq.json);
+  a real business must replace them with its own approved policies.
 - Matching is simple keyword scoring so behavior is deterministic and testable.
 """
 
@@ -70,3 +72,19 @@ def find_answer(text, faq_path=None):
         "answer": best["answer"],
         "score": best_score,
     }
+
+
+def get_answer_by_id(topic_id, faq_path=None):
+    """Return the SAMPLE answer text for a known topic id, or None.
+
+    Used by the router to fetch a detected topic's answer verbatim from
+    data/faq.json by id. The file stays the single source of truth: we never
+    invent a policy here, and an unknown/empty id honestly returns None so the
+    caller can fall through (clarify or fallback) rather than guess.
+    """
+    if not topic_id:
+        return None
+    for topic in load_topics(faq_path):
+        if topic.get("id") == topic_id:
+            return topic.get("answer")
+    return None

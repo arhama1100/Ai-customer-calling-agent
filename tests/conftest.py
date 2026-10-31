@@ -17,6 +17,7 @@ Two fixtures are defined:
 import pytest
 
 from app import create_app
+from app import rate_limit
 from app.seed import FICTIONAL_ORDERS, seed_orders
 
 
@@ -38,6 +39,18 @@ def _no_live_gemini(monkeypatch):
     yield
 
 
+@pytest.fixture(autouse=True)
+def _reset_rate_limits():
+    """Clear any in-memory rate-limit counters around every test.
+
+    A dedicated throttling test (Phase G3) enables the limiter and issues many
+    requests; this guarantees those counts can never leak into another test.
+    """
+    rate_limit.reset()
+    yield
+    rate_limit.reset()
+
+
 class TestConfig:
     """Configuration used ONLY during tests."""
 
@@ -48,6 +61,13 @@ class TestConfig:
     PORT = 5000
     # Placeholder; the real value is injected per-test by the db_path fixture.
     DB_PATH = None
+
+    # ── Phase G3 hardening: neutral by default so the existing suite is never
+    # throttled or rejected. Dedicated G3 tests flip these on to prove each
+    # guard actually works, using their own request counts/lengths. ──
+    RATE_LIMIT_ENABLED = False   # do not throttle automated tests
+    MAX_CONTENT_LENGTH = None    # no hard body-size cap during tests
+    MAX_MESSAGE_LENGTH = None    # no message-length rejection during tests
 
 
 @pytest.fixture

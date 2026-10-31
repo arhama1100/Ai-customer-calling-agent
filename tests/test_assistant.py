@@ -13,7 +13,17 @@ Run with:  .\\.venv\\Scripts\\python.exe -m pytest
 import pytest
 
 from app import assistant
+from app import faq as faq_module
 from app.assistant import respond
+
+
+def _sample(topic):
+    """The exact SAMPLE answer text stored in data/faq.json for a topic id.
+
+    Tests assert against this rather than hardcoding, so if the owner edits a
+    sample answer the regression suite keeps tracking the file (single source).
+    """
+    return faq_module.get_answer_by_id(topic)
 
 
 def test_routes_order_id_to_database(db_path):
@@ -34,17 +44,15 @@ def test_unknown_order_id_says_not_found(db_path):
 
 
 def test_routes_policy_question_to_faq(db_path):
-    # A FAQ-matched policy is acknowledged, but because data/faq.json is still
-    # DRAFT / UNAPPROVED the placeholder wording must NOT be quoted as fact.
+    # G2: data/faq.json now holds activated SAMPLE demonstration policies, so a
+    # matched policy question returns that topic's sample answer verbatim from
+    # the file (source marks it as sample data, never an invented policy).
     result = respond("What is your return policy?", db_path=db_path)
 
     assert result["intent"] == "faq"
-    assert result["source"].startswith("faq_kb:")
-    assert "unapproved" in result["source"]
-    assert result["reply"] == assistant.UNAPPROVED_POLICY_REPLY
-    assert "30 days" not in result["reply"]            # draft answer suppressed
-    assert "confirmation" in result["reply"].lower()   # asks to confirm
-    assert "support" in result["reply"].lower()        # offers support
+    assert result["source"] == "faq_kb:returns:sample"
+    assert result["reply"] == _sample("returns")
+    assert "30 days" in result["reply"]                # sample answer surfaced
 
 
 def test_greeting_is_fixed_reply(db_path):
@@ -287,8 +295,8 @@ def test_phase_e_order_status_without_id_asks_for_id(message, db_path):
         assert leaked not in result["reply"]
 
 
-# Policy questions in every language -> (topic id). The DRAFT faq.json answer
-# is never surfaced; only the safe "needs confirmation + support" notice is.
+# Policy questions in every language -> (topic id). G2 returns that topic's
+# SAMPLE demonstration answer from faq.json (never an invented policy).
 PHASE_E_POLICY_MESSAGES = [
     # English
     ("Can I cancel my order?", "cancellation"),
@@ -313,13 +321,12 @@ PHASE_E_POLICY_MESSAGES = [
 
 
 @pytest.mark.parametrize("message,topic", PHASE_E_POLICY_MESSAGES)
-def test_phase_e_policy_question_returns_safe_notice(message, topic, db_path):
+def test_phase_e_policy_question_returns_sample_answer(message, topic, db_path):
     result = respond(message, db_path=db_path)
     assert result["intent"] == "faq"
-    assert result["source"] == f"faq_kb:{topic}:unapproved"
-    assert result["reply"] == assistant.UNAPPROVED_POLICY_REPLY
-    assert "confirmation" in result["reply"].lower()
-    assert "support" in result["reply"].lower()
+    assert result["source"] == f"faq_kb:{topic}:sample"
+    assert result["reply"] == _sample(topic)
+    assert result["reply"].strip()
 
 
 # All five policy categories must keep their correct source identifier, so the
@@ -334,11 +341,11 @@ def test_phase_e_policy_question_returns_safe_notice(message, topic, db_path):
         ("how do I pay with a card", "payment"),
     ],
 )
-def test_phase_e_all_five_categories_safe(message, topic, db_path):
+def test_phase_e_all_five_categories_return_sample(message, topic, db_path):
     result = respond(message, db_path=db_path)
     assert result["intent"] == "faq"
-    assert result["source"] == f"faq_kb:{topic}:unapproved"
-    assert result["reply"] == assistant.UNAPPROVED_POLICY_REPLY
+    assert result["source"] == f"faq_kb:{topic}:sample"
+    assert result["reply"] == _sample(topic)
 
 
 def test_phase_e_mixed_language_with_id_uses_db(db_path):
@@ -371,28 +378,28 @@ def test_phase_e_response_contract_preserved(message, db_path):
     assert isinstance(result["reply"], str) and result["reply"].strip()
 
 
-def test_phase_e_policy_safety_when_gemini_enabled(db_path, monkeypatch):
-    # Gemini ON (mocked): a Roman Urdu policy question must STILL never
-    # surface the DRAFT answer - the Gemini branch returns the safe notice.
+def test_phase_e_policy_answer_when_gemini_enabled(db_path, monkeypatch):
+    # Gemini ON (mocked): a Roman Urdu cancellation question returns the
+    # cancellation SAMPLE answer (grounded in faq.json). With the mocked
+    # translation returning None, it falls back to the English sample text.
     _enable_gemini(
         monkeypatch,
         {"intent": "cancellation", "language": "roman-urdu"},
         translation=None,
     )
     result = respond("Kya main apna order cancel kar sakti hoon?", db_path=db_path)
-    assert result["reply"] == assistant.UNAPPROVED_POLICY_REPLY
-    assert result["source"] == "gemini:policy_unapproved"
-    assert "30 days" not in result["reply"]
+    assert result["reply"] == _sample("cancellation")
+    assert result["source"] == "gemini:policy_sample"
 
 
-def test_phase_e_policy_safety_when_gemini_fails(db_path, monkeypatch):
+def test_phase_e_policy_answer_when_gemini_fails(db_path, monkeypatch):
     # Gemini ON but classify fails (None): the deterministic branch still
-    # returns the safe unapproved notice for the Roman Urdu cancellation topic.
+    # answers the Roman Urdu cancellation topic from the SAMPLE FAQ.
     _enable_gemini(monkeypatch, None)
     result = respond("Kya main apna order cancel kar sakti hoon?", db_path=db_path)
     assert result["intent"] == "faq"
-    assert result["source"] == "faq_kb:cancellation:unapproved"
-    assert result["reply"] == assistant.UNAPPROVED_POLICY_REPLY
+    assert result["source"] == "faq_kb:cancellation:sample"
+    assert result["reply"] == _sample("cancellation")
 
 
 # ════════════════════════════════════════════════════════════════════════════
@@ -431,14 +438,15 @@ def test_gemini_enabled_unknown_id_is_honest(db_path, monkeypatch):
     assert "shipped" not in result["reply"]
 
 
-def test_gemini_policy_intent_not_quoted_as_fact(db_path, monkeypatch):
-    # UNAPPROVED FAQ placeholders must NOT be presented as confirmed policy.
+def test_gemini_policy_intent_returns_sample_answer(db_path, monkeypatch):
+    # G2: with Gemini ON a policy intent returns that topic's SAMPLE answer,
+    # grounded verbatim in data/faq.json (translation mocked off -> English).
     _enable_gemini(monkeypatch, {"intent": "shipping", "language": "en"})
     result = respond("how long does delivery take", db_path=db_path)
     assert result["intent"] == "shipping"
-    assert result["source"] == "gemini:policy_unapproved"
-    assert result["reply"] == assistant.UNAPPROVED_POLICY_REPLY
-    assert "1-2 business days" not in result["reply"]   # placeholder suppressed
+    assert result["source"] == "gemini:policy_sample"
+    assert result["reply"] == _sample("shipping")
+    assert "1-2 business days" in result["reply"]        # sample answer surfaced
 
 
 def test_gemini_urdu_order_status_missing_id_asks(monkeypatch):
@@ -459,7 +467,7 @@ def test_gemini_roman_urdu_payment_localized(monkeypatch):
     )
     result = respond("mujhe refund chahiye payment", db_path=None)
     assert result["intent"] == "payment"
-    assert result["source"] == "gemini:policy_unapproved"
+    assert result["source"] == "gemini:policy_sample"
     assert result["reply"].startswith("Yeh policy")
 
 
@@ -524,38 +532,36 @@ def test_gemini_result_shape_is_compatible(db_path, monkeypatch):
     assert isinstance(result["reply"], str) and result["reply"]
 
 
-# ── Unapproved-FAQ protection holds in EVERY mode (Gemini on / off / failed) ──
-def test_faq_unapproved_when_gemini_disabled(db_path, monkeypatch):
-    # Feature off (default): the deterministic FAQ branch still refuses to
-    # present the DRAFT answer as a confirmed policy.
+# ── SAMPLE policy answers are consistent in EVERY mode (Gemini on/off/failed) ─
+def test_faq_sample_when_gemini_disabled(db_path, monkeypatch):
+    # Feature off (default): the deterministic FAQ branch returns the SAMPLE
+    # answer for the shipping topic, grounded in data/faq.json.
     monkeypatch.delenv("GEMINI_ENABLED", raising=False)
     monkeypatch.delenv("GEMINI_API_KEY", raising=False)
     result = respond("how long does shipping take", db_path=db_path)
     assert result["intent"] == "faq"
-    assert "unapproved" in result["source"]
-    assert result["reply"] == assistant.UNAPPROVED_POLICY_REPLY
-    assert "1-2 business days" not in result["reply"]
+    assert result["source"] == "faq_kb:shipping:sample"
+    assert result["reply"] == _sample("shipping")
 
 
-def test_faq_unapproved_when_gemini_api_fails(db_path, monkeypatch):
+def test_faq_sample_when_gemini_api_fails(db_path, monkeypatch):
     # Enabled but classify_message returns None (timeout / API failure): we
-    # fall through to the deterministic FAQ branch, which STILL withholds the
-    # unapproved placeholder rather than quoting it.
+    # fall through to the deterministic FAQ branch, which still answers from
+    # the SAMPLE FAQ.
     _enable_gemini(monkeypatch, None)
     result = respond("what is your return policy", db_path=db_path)
     assert result["intent"] == "faq"
-    assert "unapproved" in result["source"]
-    assert result["reply"] == assistant.UNAPPROVED_POLICY_REPLY
-    assert "30 days" not in result["reply"]
+    assert result["source"] == "faq_kb:returns:sample"
+    assert result["reply"] == _sample("returns")
 
 
-def test_faq_unapproved_when_gemini_enabled_intent_wins(db_path, monkeypatch):
-    # Enabled with a successful policy classification: the Gemini branch handles
-    # it and also returns the unapproved notice (never the placeholder).
+def test_faq_sample_when_gemini_enabled_intent_wins(db_path, monkeypatch):
+    # Enabled with a successful policy classification: the Gemini branch answers
+    # from the SAMPLE FAQ (rephrased; translation mocked off -> English here).
     _enable_gemini(monkeypatch, {"intent": "cancellation", "language": "en"})
     result = respond("can I cancel my order", db_path=db_path)
-    assert result["source"] == "gemini:policy_unapproved"
-    assert result["reply"] == assistant.UNAPPROVED_POLICY_REPLY
+    assert result["source"] == "gemini:policy_sample"
+    assert result["reply"] == _sample("cancellation")
 
 
 # ════════════════════════════════════════════════════════════════════════════
@@ -647,17 +653,18 @@ def test_order_facts_are_never_localized_by_gemini(db_path, monkeypatch):
     assert calls["rephrase"] == []       # status text never rephrased
 
 
-def test_policy_notice_is_localized_only_from_fixed_text(monkeypatch):
+def test_policy_sample_is_localized_only_from_faq_text(monkeypatch):
     calls = _enable_gemini_spy(
         monkeypatch,
         {"intent": "shipping", "language": "ur"},
         translation="MOCK-LOCALIZED-POLICY",
     )
     result = respond("how long does delivery take", db_path=None)
-    assert result["source"] == "gemini:policy_unapproved"
-    # Localization is applied to OUR approved constant, never a DRAFT answer.
+    assert result["source"] == "gemini:policy_sample"
+    # Localization is applied to OUR approved SAMPLE text from faq.json, never
+    # to a model-invented policy.
     assert calls["rephrase"], "localization should have been attempted"
-    assert calls["rephrase"][0][0] == assistant.UNAPPROVED_POLICY_REPLY
+    assert calls["rephrase"][0][0] == _sample("shipping")
     assert calls["rephrase"][0][1] == "ur"
     assert result["reply"] == "MOCK-LOCALIZED-POLICY"
 
@@ -667,9 +674,9 @@ def test_localization_falls_back_when_gemini_returns_none(monkeypatch):
         monkeypatch, {"intent": "payment", "language": "roman-urdu"},
         translation=None)
     result = respond("how do I pay", db_path=None)
-    assert result["source"] == "gemini:policy_unapproved"
-    # rephrase returned None -> safe fallback to the English approved text.
-    assert result["reply"] == assistant.UNAPPROVED_POLICY_REPLY
+    assert result["source"] == "gemini:policy_sample"
+    # rephrase returned None -> safe fallback to the English SAMPLE text.
+    assert result["reply"] == _sample("payment")
     assert calls["rephrase"]  # localization was attempted, then fell back
 
 
@@ -730,19 +737,236 @@ def test_greeting_still_wins_over_farewell_area(db_path):
     assert respond("hello", db_path=db_path)["intent"] == "greeting"
 
 
-# REQUIRED: the return/refund policy response must remain EXACTLY unchanged.
-EXPECTED_RETURN_REPLY = (
-    "I want to give you the right answer, but that policy still needs "
-    "confirmation from our team. Could you please reach out to our support "
-    "team so they can confirm the exact details for you?"
-)
-
-
-def test_return_refund_response_is_unchanged(db_path):
+# G2 SUPERSEDES the old "unapproved" notice: a return/refund question now
+# returns the RETURNS SAMPLE demonstration answer from data/faq.json. The
+# farewell / greeting / order paths stay exactly unchanged, as G1 required.
+def test_return_refund_returns_sample_policy(db_path):
     for message in ["what is your return policy?", "can I get a refund on a return"]:
         result = respond(message, db_path=db_path)
         assert result["intent"] == "faq"
-        assert result["source"].startswith("faq_kb:returns:unapproved")
-        assert result["reply"] == EXPECTED_RETURN_REPLY
-        assert result["reply"] == assistant.UNAPPROVED_POLICY_REPLY
+        assert result["source"] == "faq_kb:returns:sample"
+        assert result["reply"] == _sample("returns")
         assert result["reply"] != assistant.FAREWELL_REPLY
+        assert result["reply"] != assistant.GREETING_REPLY
+
+
+# ════════════════════════════════════════════════════════════════════════════
+# Phase G1 — farewell must behave IDENTICALLY with Gemini enabled and disabled.
+# The deterministic farewell check now runs at the TOP of the Gemini branch,
+# BEFORE classify_message (Gemini has no `farewell` intent and would otherwise
+# classify 'bye' as 'other' and answer with the generic fallback). EVERY case
+# here MOCKS the wrapper, so no live API call is ever made.
+# ════════════════════════════════════════════════════════════════════════════
+@pytest.mark.parametrize("message", [
+    "bye", "goodbye", "see you", "see you later",
+    "okay bye", "allah hafiz", "khuda hafiz",
+])
+def test_g1_farewell_works_with_gemini_enabled(message, monkeypatch):
+    # Gemini ON and it insists the farewell is unrelated 'other'.
+    _enable_gemini(monkeypatch, {"intent": "other", "language": "en"})
+    result = respond(message, db_path=None)
+    assert result["intent"] == "farewell"
+    assert result["source"] == "fixed"
+    assert result["reply"] == assistant.FAREWELL_REPLY
+
+
+def test_g1_farewell_beats_gemini_greeting_misclassification(monkeypatch):
+    # Even when Gemini classifies 'bye' as 'greeting', we still say farewell.
+    _enable_gemini(monkeypatch, {"intent": "greeting", "language": "en"})
+    result = respond("bye", db_path=None)
+    assert result["intent"] == "farewell"
+    assert result["reply"] == assistant.FAREWELL_REPLY
+
+
+def test_g1_farewell_with_gemini_disabled(db_path, monkeypatch):
+    monkeypatch.delenv("GEMINI_ENABLED", raising=False)
+    monkeypatch.delenv("GEMINI_API_KEY", raising=False)
+    result = respond("khuda hafiz", db_path=db_path)
+    assert result["intent"] == "farewell"
+    assert result["source"] == "fixed"
+
+
+def test_g1_farewell_when_gemini_api_fails(monkeypatch):
+    # Enabled but classify returns None (timeout / API failure): the farewell
+    # still resolves deterministically rather than degrading to the fallback.
+    _enable_gemini(monkeypatch, None)
+    result = respond("see you later", db_path=None)
+    assert result["intent"] == "farewell"
+    assert result["reply"] == assistant.FAREWELL_REPLY
+
+
+def test_g1_gemini_never_consulted_for_farewell(monkeypatch):
+    # A farewell must not spend a Gemini call at all.
+    calls = _enable_gemini_spy(monkeypatch, {"intent": "other", "language": "en"})
+    result = respond("goodbye", db_path=None)
+    assert result["intent"] == "farewell"
+    assert calls["classify"] == 0
+
+
+@pytest.mark.parametrize("message", [
+    "thank you",
+    "I want to say goodbye to my friend",
+    "can I say my goodbyes to everyone",
+])
+def test_g1_farewell_false_positives_stay_with_gemini_enabled(message, monkeypatch):
+    # The guards survive the reorder: none of these become a farewell, even
+    # with Gemini ON classifying them as 'other'.
+    _enable_gemini(monkeypatch, {"intent": "other", "language": "en"})
+    assert respond(message, db_path=None)["intent"] != "farewell"
+
+
+def test_g1_return_refund_with_gemini_enabled(db_path, monkeypatch):
+    # G2: with Gemini ON the return question returns the RETURNS SAMPLE answer.
+    _enable_gemini(monkeypatch, {"intent": "returns", "language": "en"})
+    result = respond("what is your return policy?", db_path=db_path)
+    assert result["reply"] == _sample("returns")
+
+
+def test_g1_order_lookup_unaffected_with_gemini_enabled(db_path, monkeypatch):
+    # The pre-Gemini farewell check must not disturb the SQLite order path.
+    _enable_gemini(monkeypatch, {"intent": "other", "language": "en"})
+    result = respond("where is ORD-1002", db_path=db_path)
+    assert result["source"] == "orders_db"
+    assert "shipped" in result["reply"]
+
+
+def test_g1_greeting_still_routes_through_gemini_when_classified(monkeypatch):
+    # Preserved: greeting keeps its Gemini classification path (only farewell
+    # was lifted above the model), so this lineage marker is unchanged.
+    _enable_gemini(monkeypatch, {"intent": "greeting", "language": "en"})
+    result = respond("hello there", db_path=None)
+    assert result["intent"] == "greeting"
+    assert result["source"] == "gemini:fixed"
+
+
+# ════════════════════════════════════════════════════════════════════════════
+# Phase G2 — activated SAMPLE FAQ policies across English / Urdu script / Roman
+# Urdu / mixed. Deterministic (conftest clears GEMINI_*), so no network. Every
+# category must route to its correct topic and return that topic's sample
+# answer verbatim from data/faq.json — never an invented policy.
+# ════════════════════════════════════════════════════════════════════════════
+G2_FAQ_CASES = [
+    # English
+    ("What is your return policy?", "returns"),
+    ("Can I return my product?", "returns"),
+    ("How long does shipping take?", "shipping"),
+    ("Can I change my order?", "changes"),
+    ("What payment methods do you accept?", "payment"),
+    ("I want to cancel my order", "cancellation"),
+    # Roman Urdu
+    ("Refund kab milega?", "returns"),
+    ("Mujhe product wapas karna hai.", "returns"),
+    ("Shipping kitne din mein hogi?", "shipping"),
+    ("Mera order cancel karna hai.", "cancellation"),
+    ("Payment methods kya hain?", "payment"),
+    ("Address tabdeel karna hai", "changes"),
+    # Urdu script
+    ("میں اپنا آرڈر منسوخ کرنا چاہتی ہوں؟", "cancellation"),
+    ("مجھے پروڈکٹ واپس کرنی ہے۔", "returns"),
+    ("ادائیگی کے طریقے کیا ہیں؟", "payment"),
+    ("میں اپنا پتہ تبدیل کرنا چاہتا ہوں", "changes"),
+]
+
+
+@pytest.mark.parametrize("message,topic", G2_FAQ_CASES)
+def test_g2_multilingual_faq_returns_correct_sample(message, topic, db_path):
+    result = respond(message, db_path=db_path)
+    assert result["intent"] == "faq"
+    assert result["source"] == f"faq_kb:{topic}:sample"
+    assert result["reply"] == _sample(topic)
+    assert result["reply"].strip()
+
+
+def test_g2_all_five_categories_have_sample_answers():
+    # Data integrity: every sample topic must carry a non-empty answer text.
+    for topic in ("shipping", "returns", "cancellation", "changes", "payment"):
+        assert _sample(topic) and _sample(topic).strip()
+
+
+def test_g2_generic_policy_ask_clarifies(db_path):
+    # "policy" with no specific topic is ambiguous -> ask which one (never
+    # guess a sample answer).
+    result = respond("what is your policy", db_path=db_path)
+    assert result["intent"] == "ambiguous"
+    assert result["reply"] == assistant.CLARIFICATION_REPLY
+    assert result["source"] == "none"
+
+
+def test_g2_short_unmatched_message_is_polite_fallback(db_path):
+    # A short message with no order/policy/greeting/farewell signal gets the
+    # honest, friendly fallback rather than a fabricated answer.
+    result = respond("ok", db_path=db_path)
+    assert result["intent"] == "fallback"
+    assert result["reply"] == assistant.FALLBACK_REPLY
+
+
+def test_g2_repeated_message_is_stable(db_path):
+    # Stateless router: asking the same question twice gives the same grounded
+    # sample answer both times (no cross-message memory needed).
+    a = respond("how long does shipping take", db_path=db_path)
+    b = respond("how long does shipping take", db_path=db_path)
+    assert a == b
+    assert a["source"] == "faq_kb:shipping:sample"
+
+
+def test_g2_gemini_cannot_override_order_facts(db_path, monkeypatch):
+    # Gemini ON and it insists the message is a shipping policy; an order id in
+    # the text must still be answered from SQLite (rule 1 wins over Gemini).
+    _enable_gemini(monkeypatch, {"intent": "shipping", "language": "en"})
+    result = respond("status of ORD-1002", db_path=db_path)
+    assert result["source"] == "orders_db"
+    assert "shipped" in result["reply"]
+
+
+def test_g2_gemini_cannot_invent_policy_details(db_path, monkeypatch):
+    # Gemini ON classifies a returns question; the answer must be BYTE-IDENTICAL
+    # to the faq.json sample (translation mocked off), never model-invented text.
+    _enable_gemini(monkeypatch, {"intent": "returns", "language": "en"},
+                   translation=None)
+    result = respond("what is your return policy", db_path=db_path)
+    assert result["source"] == "gemini:policy_sample"
+    assert result["reply"] == _sample("returns")
+
+
+# ── Unsupported-policy classification: warranty/guarantee -> honest fallback ──
+def test_warranty_policy_returns_honest_fallback(db_path):
+    # "warranty" is a policy question but NOT one of the five sample topics, so
+    # the app gives its existing honest fallback - never the clarification ask.
+    result = respond("What is your warranty policy?", db_path=db_path)
+    assert result["intent"] == "fallback"
+    assert result["reply"] == assistant.FALLBACK_REPLY
+    assert result["reply"] != assistant.CLARIFICATION_REPLY
+    assert result["source"] == "none"
+
+
+def test_guarantee_policy_returns_honest_fallback(db_path):
+    # Same class as warranty: a specific policy subject with no matching FAQ
+    # topic is unsupported -> honest fallback, not a vague clarification.
+    result = respond("what is your guarantee policy?", db_path=db_path)
+    assert result["intent"] == "fallback"
+    assert result["reply"] == assistant.FALLBACK_REPLY
+
+
+def test_bare_policy_still_asks_clarification(db_path):
+    # A vague policy ask with no specific unmapped subject must STILL clarify
+    # (behavior explicitly required to stay unchanged).
+    result = respond("Tell me about your policy.", db_path=db_path)
+    assert result["intent"] == "ambiguous"
+    assert result["reply"] == assistant.CLARIFICATION_REPLY
+    assert result["source"] == "none"
+
+
+@pytest.mark.parametrize("topic,msg", [
+    ("shipping", "how long does delivery usually take"),
+    ("returns", "can I get a refund on a return"),
+    ("cancellation", "can I cancel my order"),
+    ("changes", "I need to change the wrong address on my order"),
+    ("payment", "how do I pay with a card"),
+])
+def test_supported_faq_topics_still_work(topic, msg, db_path):
+    # The five sample topics are untouched: each still returns its VERBATIM
+    # SAMPLE answer from data/faq.json (never the fallback or a clarification).
+    result = respond(msg, db_path=db_path)
+    assert result["intent"] == "faq"
+    assert result["source"] == f"faq_kb:{topic}:sample"
+    assert result["reply"] == _sample(topic)

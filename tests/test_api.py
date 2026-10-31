@@ -10,7 +10,7 @@ import pytest
 
 from app import assistant
 from app import routes
-from app.faq import load_topics
+from app.faq import load_topics, get_answer_by_id
 
 
 def test_health_returns_ok(client):
@@ -214,9 +214,10 @@ def test_chat_urdu_order_status_with_id_returns_status(client):
 
 
 # ── Phase B2: Gemini-enabled chat (fully mocked; no live API calls) ──
-def test_chat_gemini_policy_is_not_quoted(client, monkeypatch):
-    # With Gemini on, a policy question returns the "needs confirmation"
-    # notice, NOT the unapproved placeholder, and the format is unchanged.
+def test_chat_gemini_policy_returns_sample(client, monkeypatch):
+    # With Gemini on (mocked), a shipping policy question returns the SAMPLE
+    # shipping answer from data/faq.json (translation mocked off -> English),
+    # and the {intent, reply, source} format is unchanged.
     monkeypatch.setenv("GEMINI_ENABLED", "true")
     monkeypatch.setenv("GEMINI_API_KEY", "test-key-not-real")
     monkeypatch.setattr(
@@ -230,8 +231,8 @@ def test_chat_gemini_policy_is_not_quoted(client, monkeypatch):
     assert response.status_code == 200
     data = response.get_json()
     assert set(data.keys()) == {"intent", "reply", "source"}
-    assert data["source"] == "gemini:policy_unapproved"
-    assert "1-2 business days" not in data["reply"]
+    assert data["source"] == "gemini:policy_sample"
+    assert data["reply"] == get_answer_by_id("shipping")
 
 
 def test_chat_gemini_order_still_from_database(client, monkeypatch):
@@ -287,9 +288,8 @@ def test_e2e_policy_faq_contract(client, monkeypatch):
     assert r.status_code == 200
     data = r.get_json()
     _assert_chat_contract(data)
-    assert data["source"].startswith("faq_kb")
-    assert "unapproved" in data["source"]
-    assert data["reply"] == assistant.UNAPPROVED_POLICY_REPLY
+    assert data["source"] == "faq_kb:returns:sample"
+    assert data["reply"] == get_answer_by_id("returns")
 
 
 def test_e2e_greeting_contract(client, monkeypatch):
@@ -369,9 +369,10 @@ POLICY_TOPICS = {
 
 @pytest.mark.parametrize("topic", list(POLICY_TOPICS))
 @pytest.mark.parametrize("mode", ["disabled", "no_key", "classify_fails"])
-def test_faq_safety_matrix(client, monkeypatch, topic, mode):
-    # In EVERY mode a policy question returns the "needs confirmation" notice,
-    # never the unapproved DRAFT answer from data/faq.json.
+def test_faq_sample_consistency_matrix(client, monkeypatch, topic, mode):
+    # G2: in EVERY mode a policy question returns that topic's SAMPLE answer
+    # from data/faq.json (disabled / no-key / classify-fail all fall through to
+    # the deterministic FAQ branch, so the sample answer is stable and grounded).
     if mode == "disabled":
         _gemini_off(monkeypatch)
     elif mode == "no_key":
@@ -386,13 +387,8 @@ def test_faq_safety_matrix(client, monkeypatch, topic, mode):
     data = client.post(
         "/api/chat", json={"message": POLICY_TOPICS[topic]}).get_json()
     _assert_chat_contract(data)
-    assert data["reply"] == assistant.UNAPPROVED_POLICY_REPLY
-    assert "confirmation" in data["reply"].lower()
-    assert "support" in data["reply"].lower()
-    # The DRAFT wording for this topic must never leak into the reply.
-    for t in load_topics():
-        if t["id"] == topic:
-            assert t["answer"] not in data["reply"]
+    assert data["source"] == f"faq_kb:{topic}:sample"
+    assert data["reply"] == get_answer_by_id(topic)
 
 
 # ── Security: no API key / secret ever reaches a served file or API body ──

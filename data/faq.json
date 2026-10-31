@@ -1,7 +1,7 @@
 {
   "_meta": {
-    "status": "DRAFT — PENDING OWNER APPROVAL",
-    "note": "These answers are placeholders created during project scaffolding. The shop owner must review and approve the exact wording before this file is treated as the approved knowledge base. This file (data/faq.json) is the ONLY source of truth for policy answers."
+    "status": "DEMONSTRATION SAMPLE POLICIES - fictional, not an owner-approved real-world policy",
+    "note": "These are FICTIONAL sample policies for internship demonstration only. They are intentionally editable and are NOT verified real-world shop-owner policies. This file (data/faq.json) is the ONLY source of truth for policy answers, and the assistant reads an answer verbatim from here (it never invents one). A real business MUST replace every answer below with its own approved policies before any customer-facing use."
   },
   "topics": [
     {
