@@ -86,6 +86,22 @@ def test_chat_endpoint_uses_database(client):
     assert "delivered" in data["reply"]
 
 
+def test_chat_endpoint_resolves_spoken_order_number(client):
+    # Reproduces the exact reported live failure: a full spoken sentence whose
+    # order number arrives as WORDS. It must go through /api/chat, resolve to
+    # ORD-1002, and answer from SQLite - NOT the generic "I'm not sure" fallback.
+    response = client.post(
+        "/api/chat", json={"message": "I want to check order number one zero zero two."}
+    )
+
+    assert response.status_code == 200
+    data = response.get_json()
+    assert data["intent"] == "order_status"
+    assert data["source"] == "orders_db"
+    assert data["reply"].startswith("Order ORD-1002")
+    assert "shipped" in data["reply"]
+
+
 # ── Phase 6 hardening: tricky inputs to the router ──
 
 def test_none_input_is_treated_as_empty(db_path):
@@ -144,6 +160,160 @@ def test_respond_accepts_order_id_speech_variations(message, db_path):
     # NEVER the generic topic fallback.
     assert result["reply"].startswith("Order ORD-1002")
     assert "shipped" in result["reply"]
+
+
+# ── Regression: SPOKEN order numbers delivered as WORDS (the reported bug) ──
+# The call's speech recognition transcribes an order number as number words, a
+# spelled value, or the word "order"/"order number" instead of the literal ORD
+# token. Each form below must normalize to the canonical ORD-#### id and hit the
+# unchanged SQLite lookup. (None of these matched before the fix.)
+SPOKEN_ORDER_FORMS = [
+    "order number one zero zero two",   # digit words after the spoken cue
+    "I want to check order number one zero zero two.",  # EXACT reported failing sentence
+    "one zero zero two",                # the customer replying with just digits
+    "where is order 1002",              # spoken cue + digits, no literal ORD
+    "order number 1002",                # "order number" + digits
+    "my order is 1002 delivered",       # digits embedded in an order sentence
+    "ORD one zero zero two",            # ORD stem + spelled digits
+    "order one thousand two",           # compound value -> 1002
+    "\u0645\u06cc\u0631\u0627 \u0622\u0631\u0688\u0631 \u06f1\u06f0\u06f0\u06f2",  # Urdu "my order" + Urdu digits
+]
+
+
+@pytest.mark.parametrize("message", SPOKEN_ORDER_FORMS)
+def test_respond_recognizes_spoken_order_number(message, db_path):
+    result = respond(message, db_path=db_path)
+    assert result["intent"] == "order_status"
+    assert result["source"] == "orders_db"
+    assert result["reply"].startswith("Order ORD-1002")
+    assert "shipped" in result["reply"]
+
+
+def test_respond_recognizes_spoken_order_number_other_ids(db_path):
+    # 1003 is "processing" and 1006 "shipped" in the seed — the number words
+    # must resolve to the RIGHT id and reflect the DB, never a fixed answer.
+    assert respond("order one zero zero three", db_path=db_path)["reply"].startswith("Order ORD-1003")
+    assert "processing" in respond("order one zero zero three", db_path=db_path)["reply"]
+    assert respond("order number one zero zero six", db_path=db_path)["reply"].startswith("Order ORD-1006")
+
+
+def test_spoken_number_recognizes_1001_and_1002_symmetrically(db_path):
+    # The reported issue: "one zero zero two" was recognized but "one zero zero
+    # one" was not. Recognition is order-number AGNOSTIC, so the first two
+    # seeded ids must resolve identically from spoken words, and each status
+    # must come from SQLite (1001 delivered, 1002 shipped) - never hardcoded.
+    cases = [
+        ("one zero zero one", "Order ORD-1001", "delivered"),
+        ("one zero zero two", "Order ORD-1002", "shipped"),
+    ]
+    for words, expect_prefix, expect_status in cases:
+        for msg in (
+            f"I want to check order number {words}.",
+            f"order number {words}",
+            words,                              # bare digits (a call "repeat" reply)
+        ):
+            result = respond(msg, db_path=db_path)
+            assert result["intent"] == "order_status", msg
+            assert result["source"] == "orders_db", msg
+            assert result["reply"].startswith(expect_prefix), msg
+            assert expect_status in result["reply"], msg
+
+
+def test_chat_endpoint_resolves_spoken_order_1001(client):
+    # Exact reported sentence, through the real /api/chat route (not just respond).
+    data = client.post(
+        "/api/chat", json={"message": "I want to check order number one zero zero one."}
+    ).get_json()
+    assert data["intent"] == "order_status"
+    assert data["source"] == "orders_db"
+    assert data["reply"].startswith("Order ORD-1001")
+    assert "delivered" in data["reply"]
+
+
+# ── Regression: fixed replies that get SPOKEN must not leak a live order id ──
+_DIGIT_WORDS = {
+    "0": "zero", "1": "one", "2": "two", "3": "three", "4": "four",
+    "5": "five", "6": "six", "7": "seven", "8": "eight", "9": "nine",
+}
+
+
+def test_spoken_guidance_never_leaks_a_live_order_id(db_path):
+    # In a voice call these fixed lines are spoken out loud. If one contains a real
+    # order id, the microphone can re-hear it and submit it as though the customer
+    # said it: the assistant then appears to "recognize" a number nobody spoke, and
+    # only that one. The prompts must describe the FORMAT instead. Checked against
+    # every id actually stored in SQLite (the source of truth), never hardcoded.
+    from app.database import get_connection
+
+    conn = get_connection(db_path)
+    try:
+        ids = [row["order_id"] for row in conn.execute("SELECT order_id FROM orders")]
+    finally:
+        conn.close()
+    assert ids, "this check is only meaningful against seeded orders"
+
+    spoken_lines = [
+        assistant.ORDER_ID_REQUEST_REPLY,
+        assistant.ORDER_ID_REPEAT_REPLY,
+        assistant.FALLBACK_REPLY,
+    ]
+    for text in spoken_lines:
+        lowered = text.lower()
+        for order_id in ids:
+            digits = order_id.split("-")[-1]
+            spelled = " ".join(_DIGIT_WORDS[d] for d in digits)
+            assert order_id.lower() not in lowered, f"{order_id} leaked into {text!r}"
+            assert digits not in text, f"{digits} leaked into {text!r}"
+            assert spelled not in lowered, f"'{spelled}' leaked into {text!r}"
+
+
+# ── Regression: an UNCLEAR spoken number asks to repeat, never invents an id ──
+UNCLEAR_ORDER_FORMS = [
+    "order one two three status",              # only 3 digits heard
+    "order number one hundred twenty-three",   # 123 - not a complete id
+    "order one two three four five",           # 5 digits - not a 4-digit id
+]
+
+
+@pytest.mark.parametrize("message", UNCLEAR_ORDER_FORMS)
+def test_respond_unclear_number_asks_repeat_without_guessing(message, db_path):
+    result = respond(message, db_path=db_path)
+    assert result["intent"] == "order_status_unclear"
+    assert result["source"] == "none"
+    assert "repeat" in result["reply"].lower()
+    # We NEVER fabricate an order id or leak a real status for a heard-but-
+    # incomplete number.
+    assert "Order ORD-" not in result["reply"]
+    assert "shipped" not in result["reply"]
+
+
+# ── Guards: numbers that are NOT an order must not be hijacked ──
+def test_unclear_number_does_not_override_policy_action(db_path):
+    # "cancel order 123" gives an order word + a number, but the intent is a
+    # CANCELLATION policy; the policy branch must still win (no repeat prompt,
+    # no order lookup).
+    result = respond("cancel order 123", db_path=db_path)
+    assert result["intent"] not in ("order_status", "order_status_unclear")
+
+
+def test_quantity_phrase_is_not_read_as_an_order_id(db_path):
+    # "ordered" is not an order-reference cue and 1000 is not the id being
+    # asked about, so this stays on the non-order path.
+    result = respond("I ordered 1000 items", db_path=db_path)
+    assert result["intent"] != "order_status"
+
+
+def test_number_normalizer_units():
+    toks = assistant._number_tokens
+    groups = assistant._digit_groups
+    assert groups(toks("one zero zero two")) == ["1002"]      # digit sequence
+    assert groups(toks("one hundred twenty-three")) == ["123"]  # compound value
+    assert groups(toks("one thousand two")) == ["1002"]        # scale phrase
+    assert groups(toks("twenty three")) == ["23"]              # tens + ones
+    assert groups(toks("1002")) == ["1002"]                    # literal digits
+    # A lone common number word is too weak to be treated as a number.
+    assert groups(toks("one")) == []
+    assert groups(toks("five")) == []
 
 
 def test_respond_unknown_order_id_is_honest_not_generic_fallback(db_path):
@@ -840,6 +1010,210 @@ def test_g1_greeting_still_routes_through_gemini_when_classified(monkeypatch):
 
 
 # ════════════════════════════════════════════════════════════════════════════
+# Phase E.2 — Gratitude response. A thank-you used to reach the honest fallback
+# ("I'm not sure how to help with that yet") because it is deliberately NOT a
+# farewell. It now has its own DETERMINISTIC intent, matched with the same
+# whole-word / short-message guards as greeting and farewell, so it can never
+# steal a message that carries a real request. Gemini is mocked wherever it
+# appears below: no live call is ever made.
+# ════════════════════════════════════════════════════════════════════════════
+GRATITUDE_CASES = [
+    # English
+    "thank you", "thanks", "thanks a lot", "thank you so much",
+    "thank you very much", "many thanks", "thanks so much",
+    # Roman Urdu
+    "shukriya", "bohat shukriya", "bahut shukriya", "aap ka shukriya",
+    "shukriya bohat", "shukria",
+    # Urdu script
+    "شکریہ", "بہت شکریہ", "آپ کا شکریہ",
+]
+
+
+@pytest.mark.parametrize("message", GRATITUDE_CASES)
+def test_gratitude_detected_all_languages(message, db_path):
+    result = respond(message, db_path=db_path)
+    assert result["intent"] == "gratitude"
+    assert result["source"] == "fixed"
+
+
+@pytest.mark.parametrize("message", [
+    "Thank you", "Thanks", "Thanks a lot", "Thank you so much",
+])
+def test_gratitude_ignores_capitalization_and_punctuation(message, db_path):
+    # The voice path hands us whatever the browser recognized, often
+    # capitalised and sometimes punctuated: "Thank you!" must count too.
+    assert respond(message, db_path=db_path)["intent"] == "gratitude"
+    assert respond(message + "!", db_path=db_path)["intent"] == "gratitude"
+
+
+@pytest.mark.parametrize("message", ["Thank you.", "Thanks a lot.", "shukriya."])
+def test_gratitude_survives_the_voice_turn_terminator(message, db_path):
+    # call.js submits a buffer as soon as it ends with .!? - the trailing period
+    # arrives here and must not hide the thank-you.
+    assert respond(message, db_path=db_path)["intent"] == "gratitude"
+
+
+def test_gratitude_reply_wording(db_path):
+    result = respond("thank you", db_path=db_path)
+    assert result["reply"] == "You're welcome! Is there anything else I can help you with?"
+    assert result["reply"] == assistant.GRATITUDE_REPLY
+    # Thanking us is NOT leaving: it must not reuse the farewell sentence.
+    assert result["reply"] != assistant.FAREWELL_REPLY
+    assert "goodbye" not in result["reply"].lower()
+
+
+def test_gratitude_in_urdu_script_answers_in_urdu(db_path):
+    result = respond("بہت شکریہ", db_path=db_path)
+    assert result["intent"] == "gratitude"
+    assert result["reply"] == assistant.GRATITUDE_REPLY_URDU
+
+
+# Requirement 3: gratitude is a STANDALONE-message intent and never overrides a
+# message that also contains a real question — whichever rule understands the
+# request wins.
+@pytest.mark.parametrize("message", [
+    "thanks, what is my order status?",
+    "thank you, but what is the status of my order?",
+    "thanks order status",
+    "shukriya, mera order status kya hai",
+])
+def test_gratitude_does_not_override_an_order_question(message, db_path):
+    result = respond(message, db_path=db_path)
+    assert result["intent"] != "gratitude"
+    assert result["intent"] == "order_status_missing_id", result
+    assert result["reply"] == assistant.ORDER_ID_REQUEST_REPLY
+
+
+@pytest.mark.parametrize("message,topic", [
+    ("thanks, what is your return policy?", "returns"),
+    ("thank you, how long does shipping take?", "shipping"),
+])
+def test_gratitude_does_not_override_a_policy_question(message, topic, db_path):
+    result = respond(message, db_path=db_path)
+    assert result["intent"] == "faq"
+    assert result["source"] == f"faq_kb:{topic}:sample"
+    assert result["reply"] == _sample(topic)
+
+
+def test_gratitude_does_not_override_a_known_order(db_path):
+    # A thank-you glued onto a real lookup still reads SQLite.
+    result = respond("thanks, status of ORD-1001", db_path=db_path)
+    assert result["intent"] == "order_status"
+    assert result["source"] == "orders_db"
+    assert "ORD-1001" in result["reply"]
+
+
+# False-positive guards, mirroring the farewell ones.
+def test_thanks_mentioned_in_a_long_sentence_is_not_gratitude(db_path):
+    # > 4 tokens, so the short-message guard rejects it: the customer is
+    # describing something else and must NOT get a "you're welcome".
+    msg = "thanks for letting me know about the delay"
+    result = respond(msg, db_path=db_path)
+    assert result["intent"] != "gratitude"
+    assert result["reply"] != assistant.GRATITUDE_REPLY
+    # Nothing else in that sentence names an order or a policy topic, so the
+    # honest fallback is the correct, unchanged verdict.
+    assert result["intent"] == "fallback"
+    assert result["source"] == "none"
+    assert result["reply"] == assistant.FALLBACK_REPLY
+
+
+def test_bare_thank_you_is_still_not_a_farewell(db_path):
+    # The pre-existing guard: a thank-you does not close the call.
+    assert respond("thank you", db_path=db_path)["intent"] != "farewell"
+
+
+def test_thank_you_with_goodbye_is_a_farewell_not_gratitude(db_path):
+    # When both are said, leaving wins - that message ends the conversation.
+    assert respond("thank you bye", db_path=db_path)["intent"] == "farewell"
+
+
+# Preservation: the response contract, the fallback, and the model budget.
+def test_gratitude_keeps_the_chat_response_contract(client):
+    data = client.post("/api/chat", json={"message": "Thank you"}).get_json()
+    assert set(data) == {"intent", "reply", "source"}
+    assert data["intent"] == "gratitude"
+    assert data["reply"] == assistant.GRATITUDE_REPLY
+    assert data["source"] == "fixed"
+
+
+def test_gratitude_leaves_the_unknown_question_fallback_honest(db_path):
+    # The fallback is still there for genuinely unknown asks; gratitude did not
+    # become a catch-all.
+    result = respond("do you sell helicopters", db_path=db_path)
+    assert result["intent"] == "fallback"
+    assert result["source"] == "none"
+    assert result["reply"] == assistant.FALLBACK_REPLY
+
+
+def test_gratitude_works_with_gemini_disabled(db_path, monkeypatch):
+    monkeypatch.delenv("GEMINI_ENABLED", raising=False)
+    monkeypatch.delenv("GEMINI_API_KEY", raising=False)
+    assert respond("thanks", db_path=db_path)["intent"] == "gratitude"
+
+
+@pytest.mark.parametrize("message", ["thanks", "thank you so much", "shukriya"])
+def test_gratitude_is_deterministic_with_gemini_enabled(message, monkeypatch):
+    # Same verdict whether the model is on or off, and the model's own opinion
+    # (here 'other') is never allowed to downgrade it to the fallback.
+    _enable_gemini(monkeypatch, {"intent": "other", "language": "en"})
+    result = respond(message, db_path=None)
+    assert result["intent"] == "gratitude"
+    assert result["source"] == "fixed"
+    assert result["reply"] == assistant.GRATITUDE_REPLY
+
+
+def test_gemini_never_consulted_for_gratitude(monkeypatch):
+    calls = _enable_gemini_spy(monkeypatch, {"intent": "other", "language": "en"})
+    assert respond("thank you", db_path=None)["intent"] == "gratitude"
+    assert calls["classify"] == 0
+    assert calls["rephrase"] == []
+
+
+def test_gratitude_does_not_disturb_greeting_or_farewell(db_path):
+    assert respond("hello", db_path=db_path)["intent"] == "greeting"
+    assert respond("goodbye", db_path=db_path)["intent"] == "farewell"
+    assert respond("bye", db_path=db_path)["intent"] == "farewell"
+
+
+# The exact phrase list from the bug report, checked end-to-end through the real
+# /api/chat route (Text Chat) AND through respond() (the path the voice call
+# reaches after the browser turns speech into text). This is the contract that
+# proves the fix: if a live server disagrees with these verdicts, it is running
+# OUTDATED code (needs a restart), NOT a missing intent.
+REPORT_PHRASES = [
+    # (message, expected intent)
+    ("Thank you", "gratitude"),
+    ("Shukriya", "gratitude"),
+    ("Bohat shukriya", "gratitude"),
+    ("Mera order kahan hai?", "order_status_missing_id"),
+    ("Mera order kab deliver hoga?", "order_status_missing_id"),
+    ("آرڈر کی حالت بتائیں", "order_status_missing_id"),
+]
+
+
+@pytest.mark.parametrize("message,expected", REPORT_PHRASES)
+def test_report_phrases_via_api_and_rules(message, expected, client, db_path):
+    via_api = client.post("/api/chat", json={"message": message}).get_json()
+    assert via_api["intent"] == expected, (message, via_api)
+    assert set(via_api) == {"intent", "reply", "source"}
+    via_rules = respond(message, db_path=db_path)
+    assert via_rules["intent"] == expected
+    assert via_api["reply"] == via_rules["reply"]
+
+
+@pytest.mark.parametrize("message", ["Thank you", "Shukriya", "Bohat shukriya"])
+def test_report_gratitude_phrases_are_never_the_fallback(message, client):
+    # Regression for the reported symptom: these used to answer
+    # "I'm not sure how to help with that yet" over the voice call.
+    data = client.post("/api/chat", json={"message": message}).get_json()
+    assert data["intent"] == "gratitude"
+    assert data["reply"] != assistant.FALLBACK_REPLY
+    assert "welcome" in data["reply"].lower()
+
+
+
+# ════════════════════════════════════════════════════════════════════════════
 # Phase G2 — activated SAMPLE FAQ policies across English / Urdu script / Roman
 # Urdu / mixed. Deterministic (conftest clears GEMINI_*), so no network. Every
 # category must route to its correct topic and return that topic's sample
@@ -970,3 +1344,367 @@ def test_supported_faq_topics_still_work(topic, msg, db_path):
     assert result["intent"] == "faq"
     assert result["source"] == f"faq_kb:{topic}:sample"
     assert result["reply"] == _sample(topic)
+
+
+# ════════════════════════════════════════════════════════════════════════
+# Natural-language understanding: the SAME question said DIFFERENT ways.
+# Every test here runs with Gemini OFF (the conftest autouse fixture clears the
+# flag and the key), so what is under test is the DETERMINISTIC router alone:
+# wording that used to fall through to the generic fallback must now resolve.
+# ════════════════════════════════════════════════════════════════════════
+_ORDER_STATUS_NO_ID_PHRASES = [
+    # English, including phrasings with no "status / where / track" wording.
+    "What is the status of my order?",
+    "What is my order status?",
+    "Where is my parcel?",
+    "Has my order arrived?",
+    "Can you tell me about my order?",
+    "When will I get my order?",
+    "Any update on my shipment?",
+    "Did my order get delivered yet?",
+    "Is my shipment moving?",
+    # Roman Urdu
+    "Mera order kahan tak pohancha hai?",
+    "Mera parcel deliver hua ya nahi?",
+    "kya mera order aa gaya",
+    "mera order track kar sakte hain",
+    "order ka status check karo",
+    # Urdu script (escaped so the file bytes are exact): "where is my order?",
+    # "when will my order come", "tell me the condition of the order".
+    "\u0645\u06cc\u0631\u0627 \u0622\u0631\u0688\u0631 \u06a9\u06c1\u0627\u06ba \u06c1\u06d2\u061f",
+    "\u0645\u06cc\u0631\u0627 \u0622\u0631\u0688\u0631 \u06a9\u0628 \u0622\u0626\u06d2 \u06af\u0627\u061f",
+    "\u0622\u0631\u0688\u0631 \u06a9\u06cc \u062d\u0627\u0644\u062a \u0628\u062a\u0627\u0626\u06cc\u06ba",
+    # Mixed Urdu-English
+    "where is mera order ka status",
+]
+
+
+@pytest.mark.parametrize("msg", _ORDER_STATUS_NO_ID_PHRASES)
+def test_varied_order_status_wording_asks_for_the_order_number(msg, db_path):
+    # Every phrasing is the SAME intent: a question about their own parcel with no
+    # id given. The honest answer is to ASK for the number - never to guess an
+    # order, and never to shrug with the generic fallback.
+    result = respond(msg, db_path=db_path)
+    assert result["intent"] == "order_status_missing_id", msg
+    assert result["reply"] == assistant.ORDER_ID_REQUEST_REPLY, msg
+    assert result["source"] == "none", msg
+
+
+@pytest.mark.parametrize("msg,status", [
+    ("where is my order ORD-1002", "shipped"),
+    ("order number one zero zero two status", "shipped"),
+    ("tracking 1002 please", "shipped"),
+    ("Mera order 1001 kahan hai", "delivered"),
+    ("can you check order 1003 for me", "processing"),
+    # Urdu script: "where is my order 1003" written with Urdu digit glyphs.
+    ("\u0645\u06cc\u0631\u0627 \u0622\u0631\u0688\u0631 \u0661\u0660\u0660\u0663 "
+     "\u06a9\u06c1\u0627\u06ba \u06c1\u06d2", "processing"),
+])
+def test_varied_wording_with_a_number_reads_the_real_status(msg, status, db_path):
+    # The wording changes but the DATA never does: the status is whatever SQLite
+    # holds for that id, word for word from describe_order().
+    result = respond(msg, db_path=db_path)
+    assert result["intent"] == "order_status", msg
+    assert result["source"] == "orders_db", msg
+    assert status in result["reply"], (msg, result["reply"])
+
+
+_VARIED_POLICY_PHRASES = [
+    # Order status / tracking vs SHIPPING POLICY must not be confused: these
+    # name no order at all, so they are policy questions.
+    ("shipping", "how long does delivery usually take"),
+    ("shipping", "which courier company delivers my parcel"),
+    ("shipping", "delivery mein kitne din lagte hain"),
+    ("shipping", "courier kaunsa use karte ho"),
+    # Urdu script: "how many days does delivery take"
+    ("shipping", "\u062a\u0631\u0633\u06cc\u0644\u0627\u062a \u0645\u06cc\u06ba \u06a9\u062a\u0646\u06d2 "
+                 "\u062f\u0646 \u0644\u06af\u062a\u06d2 \u06c1\u06cc\u06ba\u061f"),
+    # Returns / refunds, said without ever using the word "return"
+    ("returns", "can I send this item back to you"),
+    ("returns", "I want my money back"),
+    ("returns", "main ye item wapas bhejna chahta hoon"),
+    # Urdu script: "I want to send this thing back"
+    ("returns", "\u0645\u06cc\u06ba \u06cc\u06c1 \u0686\u06cc\u0632 \u0648\u0627\u067e\u0633 "
+                "\u0628\u06be\u06cc\u062c\u0646\u0627 \u0686\u0627\u06c1\u062a\u0627 "
+                "\u06c1\u0648\u06ba"),
+    # Cancellation, said without the word "cancel"
+    ("cancellation", "please stop my order"),
+    ("cancellation", "please remove my order from your system"),
+    # Urdu script: "can I get my order cancelled?"
+    ("cancellation", "\u0622\u0631\u0688\u0631 \u06a9\u0646\u0633\u0644 \u06a9\u0631\u0648\u0627 "
+                     "\u0633\u06a9\u062a\u06d2 \u06c1\u06cc\u06ba\u061f"),
+    # Changes: a shifted address, or a wrong item to fix
+    ("changes", "I shifted house update my delivery location"),
+    ("changes", "the address on my order is wrong"),
+    ("changes", "order mein item galat ho gaya hai theek kar dein"),
+    # Urdu script: "I need to change the address"
+    ("changes", "\u067e\u062a\u06c1 \u0628\u062f\u0644\u0646\u0627 \u06c1\u06d2"),
+    # Payment
+    ("payment", "my card was charged twice"),
+    ("payment", "can I pay cash on delivery"),
+    ("payment", "do you accept apple pay"),
+    # Urdu script: "how will the money be returned", "how do I pay"
+    ("payment", "\u067e\u06cc\u0633\u06d2 \u06a9\u06cc\u0633 \u0645\u0644\u06cc\u06ba "
+                "\u06af\u06d2"),
+    ("payment", "\u0627\u062f\u0627\u0626\u06cc\u06af\u06cc \u06a9\u06cc\u0633\u06d2 "
+                "\u06a9\u0631\u0648\u06ba"),
+]
+
+
+@pytest.mark.parametrize("topic,msg", _VARIED_POLICY_PHRASES)
+def test_varied_policy_wording_maps_to_the_right_sample_topic(topic, msg, db_path):
+    # Different wording must not change the ANSWER: the reply is always the
+    # verbatim SAMPLE text stored in data/faq.json for that topic.
+    result = respond(msg, db_path=db_path)
+    assert result["intent"] == "faq", msg
+    assert result["source"] == f"faq_kb:{topic}:sample", msg
+    assert result["reply"] == _sample(topic), msg
+
+
+def test_personal_order_question_is_not_answered_with_a_shipping_policy(db_path):
+    # Data accuracy: faq.json matches keywords as SUBSTRINGS, so "shipment"
+    # contains "ship". A customer describing their OWN parcel must be asked for
+    # the order number, not handed the generic shipping policy as if it were
+    # their status.
+    for msg in ("any update on my shipment?", "where is my shipment now?",
+                "has my shipment been dispatched?"):
+        result = respond(msg, db_path=db_path)
+        assert result["intent"] == "order_status_missing_id", msg
+        assert "1-2 business days" not in result["reply"], msg
+
+
+def test_change_request_beats_the_order_status_reading(db_path):
+    # "...theek kar dein" (please fix it) mentions the order AND uses a status
+    # cue ("gaya"), but it is a request to CHANGE the order: the policy branch
+    # must win, so the customer gets the change rules instead of "give me your
+    # order number".
+    result = respond("order mein item galat ho gaya hai theek kar dein",
+                     db_path=db_path)
+    assert result["source"] == "faq_kb:changes:sample"
+
+
+@pytest.mark.parametrize("msg", [
+    "when do you open",
+    "I will come back later",
+    "what is your favourite food",
+])
+def test_broadened_cues_do_not_invent_an_order_question(msg, db_path):
+    # Guard for the widened vocabulary: an everyday sentence that merely contains
+    # a word like "when", "back" or "get" must NOT be read as an order question.
+    result = respond(msg, db_path=db_path)
+    assert result["intent"] == "fallback", msg
+    assert result["reply"] == assistant.FALLBACK_REPLY, msg
+
+
+@pytest.mark.parametrize("msg", [
+    "do you have a physical store in Lahore",
+    "tell me about the weather",
+    "who founded this company",
+])
+def test_questions_we_cannot_answer_stay_honest(msg, db_path):
+    # Understanding more wording must not mean claiming to know more topics.
+    result = respond(msg, db_path=db_path)
+    assert result["intent"] == "fallback", msg
+    assert result["source"] == "none", msg
+    assert result["reply"] == assistant.FALLBACK_REPLY, msg
+
+
+# ════════════════════════════════════════════════════════════════════════
+# Gemini used PROPORTIONATELY: it classifies wording the rules cannot settle,
+# but it can neither invent facts, discard a rule answer, nor be consulted when
+# the rules already know. EVERY test below MOCKS the wrapper - no live call.
+# ════════════════════════════════════════════════════════════════════════
+def test_gemini_other_verdict_does_not_discard_a_rule_answer(db_path, monkeypatch):
+    # The model shrugs ("other") at a natural order question. Before, that verdict
+    # ended the turn with the generic fallback; now the deterministic rules still
+    # get their turn and ask for the order number.
+    _enable_gemini(monkeypatch, {"intent": "other", "language": "en"})
+    result = respond("when will I get my order", db_path=db_path)
+    assert result["intent"] == "order_status_missing_id"
+    assert result["reply"] == assistant.ORDER_ID_REQUEST_REPLY
+    assert result["source"] == "none"
+
+
+def test_gemini_ambiguous_verdict_does_not_discard_a_rule_answer(db_path, monkeypatch):
+    _enable_gemini(monkeypatch, {"intent": "ambiguous", "language": "en"})
+    result = respond("how long does delivery take", db_path=db_path)
+    assert result["intent"] == "faq"
+    assert result["source"] == "faq_kb:shipping:sample"
+    assert result["reply"] == _sample("shipping")
+
+
+def test_gemini_only_says_fallback_when_the_rules_also_fail(db_path, monkeypatch):
+    # The model's hesitation is used HONESTLY at the end: nothing matched, so we
+    # admit it (still no invented answer), localized per the model's language hint.
+    _enable_gemini(monkeypatch, {"intent": "other", "language": "en"})
+    result = respond("who founded this company", db_path=db_path)
+    assert result["intent"] == "fallback"
+    assert result["reply"] == assistant.FALLBACK_REPLY
+    assert result["source"] == "gemini:fixed"
+
+
+def test_gemini_low_confidence_asks_instead_of_acting(db_path, monkeypatch):
+    # needs_clarification is the model's own "I am not sure" signal. We take it
+    # seriously even when our rules WOULD have guessed: a clarifying question is
+    # safer than acting on a shaky classification.
+    _enable_gemini(monkeypatch, {
+        "intent": "order_status", "language": "en",
+        "order_id": "", "needs_clarification": True,
+    })
+    result = respond("where is my parcel", db_path=db_path)
+    assert result["intent"] == "ambiguous"
+    assert result["reply"] == assistant.CLARIFICATION_REPLY
+    assert result["source"] == "gemini:fixed"
+
+
+def test_gemini_failure_leaves_the_deterministic_answer_unchanged(db_path, monkeypatch):
+    # classify_message returning None is what a timeout / API failure / malformed
+    # payload looks like from here. The reply must be EXACTLY the rules-only reply.
+    phrasing = "can you tell me about my order"
+    monkeypatch.delenv("GEMINI_ENABLED", raising=False)
+    monkeypatch.delenv("GEMINI_API_KEY", raising=False)
+    without_model = respond(phrasing, db_path=db_path)
+
+    _enable_gemini(monkeypatch, None)
+    with_model_failed = respond(phrasing, db_path=db_path)
+
+    assert without_model == with_model_failed
+    assert with_model_failed["intent"] == "order_status_missing_id"
+
+
+def test_gemini_rogue_intent_label_is_validated_before_routing(db_path, monkeypatch):
+    # The REAL classify_message runs here; only the raw model text is faked. An
+    # intent outside the approved list is normalized to "other", so a rogue (or
+    # prompt-injected) label can never reach - or steer - the router.
+    monkeypatch.setenv("GEMINI_ENABLED", "true")
+    monkeypatch.setenv("GEMINI_API_KEY", "test-key-not-real")
+    monkeypatch.setattr(
+        assistant.gemini_module, "generate_text",
+        lambda *a, **k: '{"intent": "delete_everything", "language": "en"}',
+    )
+    result = respond("when will I get my order", db_path=db_path)
+    assert result["intent"] == "order_status_missing_id"
+    assert result["source"] == "none"
+
+
+def test_gemini_unparseable_payload_is_dropped(db_path, monkeypatch):
+    # Truncated JSON: classify_message returns None and the rules answer alone.
+    monkeypatch.setenv("GEMINI_ENABLED", "true")
+    monkeypatch.setenv("GEMINI_API_KEY", "test-key-not-real")
+    monkeypatch.setattr(
+        assistant.gemini_module, "generate_text",
+        lambda *a, **k: '{"intent": "shipp',
+    )
+    result = respond("my card was charged twice", db_path=db_path)
+    assert result["source"] == "faq_kb:payment:sample"
+    assert result["reply"] == _sample("payment")
+
+
+def test_gemini_extracted_number_is_used_only_because_the_customer_said_it(db_path, monkeypatch):
+    # "what about 1002" gives no order-reference word, so rule 1 does not resolve
+    # it and the model is consulted. It extracted 1002 from THIS message, which we
+    # can verify against the customer's own words - so the number is usable, but
+    # the STATUS still comes from SQLite (source orders_db).
+    _enable_gemini(monkeypatch, {
+        "intent": "order_status", "language": "en",
+        "order_id": "ORD-1002", "needs_clarification": False,
+    })
+    result = respond("what about 1002", db_path=db_path)
+    assert result["intent"] == "order_status"
+    assert result["source"] == "orders_db"
+    assert result["reply"].startswith("Order ORD-1002")
+
+
+def test_gemini_invented_number_is_discarded_not_looked_up(db_path, monkeypatch):
+    # The customer named NO number, so whatever the model claims is unverifiable:
+    # it must never be sent to SQLite (a fabricated id could otherwise return a
+    # real stranger's order) - we ask the customer instead.
+    _enable_gemini(monkeypatch, {
+        "intent": "order_status", "language": "en",
+        "order_id": "ORD-1002", "needs_clarification": False,
+    })
+    result = respond("where is my parcel right now", db_path=db_path)
+    assert result["intent"] == "order_status_missing_id"
+    assert result["source"] == "gemini:fixed"
+    assert "ORD-1002" not in result["reply"]
+    assert "shipped" not in result["reply"]
+
+
+def test_model_is_not_consulted_when_the_rules_already_resolve(db_path, monkeypatch):
+    # "Do not call Gemini unnecessarily": an order id is answered by SQLite alone,
+    # and a short goodbye is resolved by the deterministic farewell rule, so the
+    # model is never asked (no cost, no latency, no new failure mode) even when
+    # the feature is fully enabled.
+    calls = _enable_gemini_spy(monkeypatch, {"intent": "other", "language": "en"})
+    assert respond("status of ORD-1002", db_path=db_path)["source"] == "orders_db"
+    assert respond("bye", db_path=db_path)["intent"] == "farewell"
+    assert calls["classify"] == 0
+
+
+def test_chat_contract_unchanged_for_new_wording(client):
+    # Step 5: /api/chat keeps the SAME response contract for these phrasings.
+    data = client.post("/api/chat", json={"message": "Where is my parcel?"}).get_json()
+    assert set(data.keys()) == {"intent", "reply", "source"}
+    assert data["intent"] == "order_status_missing_id"
+
+
+# ════════════════════════════════════════════════════════════════════════
+# VOICE vs TEXT must reach the SAME backend with the SAME turn. The reported
+# "I am not sure" during calls was not intent detection: recognition split one
+# spoken sentence into fragments at a natural pause, and each fragment on its
+# own really is unanswerable. These tests pin both halves of that contract -
+# what the voice layer now assembles, and how honestly a lone fragment is
+# treated (no guessing an order question from half a sentence).
+# ════════════════════════════════════════════════════════════════════════
+_VOICE_ASSEMBLED_TURNS = [
+    # Exactly what tests/js/test_call_state.js asserts the call controller now
+    # POSTs as {"message": ...} for a sentence spoken across a pause.
+    "What is the status of my order?",
+    "the status of my order?",
+    "one zero zero one",
+]
+
+
+@pytest.mark.parametrize("turn", _VOICE_ASSEMBLED_TURNS)
+def test_voice_turn_and_text_chat_get_the_same_answer(turn, client, db_path):
+    # One backend, one router: the voice path must not be answered differently
+    # from the typed path, so the two replies have to be identical.
+    via_text = client.post("/api/chat", json={"message": turn}).get_json()
+    via_rules = respond(turn, db_path=db_path)
+    assert via_text["intent"] == via_rules["intent"]
+    assert via_text["reply"] == via_rules["reply"]
+    assert via_text["source"] == via_rules["source"]
+
+
+def test_voice_turn_with_a_number_reads_the_database(client):
+    # The assembled voice turn is a real order question, answered from SQLite.
+    data = client.post(
+        "/api/chat", json={"message": "What is the status of my order? one zero zero one"}
+    ).get_json()
+    assert data["intent"] == "order_status"
+    assert data["source"] == "orders_db"
+    assert data["reply"].startswith("Order ORD-1001")
+
+
+# The pieces the old 750 ms window used to submit on their own.
+_VOICE_FRAGMENTS = [
+    "What is the status",
+    "of my order?",
+    "What is",
+    "the status of my",
+    "tell me about the",
+]
+
+
+@pytest.mark.parametrize("fragment", _VOICE_FRAGMENTS)
+def test_half_a_question_is_answered_honestly(fragment, db_path):
+    # No order reference (or no question at all) survives the split, so the
+    # router must NOT invent an intent from a fragment: it admits it cannot tell
+    # and asks again. This is correct behaviour - the fix belongs in turn
+    # assembly, not in guessing here.
+    result = respond(fragment, db_path=db_path)
+    assert result["intent"] == "fallback", fragment
+    assert result["source"] == "none", fragment
+    assert result["reply"] == assistant.FALLBACK_REPLY, fragment
+
+

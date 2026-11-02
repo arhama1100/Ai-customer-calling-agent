@@ -6,24 +6,25 @@ deterministic, local sources — order status from a SQLite database and topic
 answers from a sample FAQ file. It never invents an answer, and it always
 falls back to honest text chat when voice features are unavailable.
 
-> Status: **Phases 0–6, the Gemini integration phases (B1–B4), the
-> hardening/multilingual phases (C–E.1), and the whole of Phase G — G1 (farewell
-> consistency with Gemini on/off), G2 (activated sample FAQ policies +
-> multilingual answering) and G3 (security hardening: request validation, safe
-> JSON error handling, rate limiting, and production-safe configuration) — are
-> complete** — a Flask API, SQLite orders, an FAQ of **demonstration sample
-> policies**, a deterministic assistant, a plain HTML/CSS/JS frontend with browser
-> STT/TTS, and an **optional Gemini natural-language layer that is implemented but
-> OFF by default** (`GEMINI_ENABLED=false`). The current suite is **286 passing
-> tests** (verified), and the **text-chat flow was confirmed end-to-end in a real
-> browser** in an earlier phase. Gemini only classifies intent/language and
-> rephrases our own approved text; order status still comes **only** from SQLite,
-> policy answers come **only** from the sample FAQ (fictional demonstration data,
-> clearly labelled, never invented), and every Gemini interaction in the tests is
-> mocked (no live API call has been made). The new G3 security limits (rate
-> limiting, body/message-size caps, JSON error handlers) are covered by automated
-> tests, but **real microphone/audio behaviour and live Gemini remain unverified**
-> — see [Known limitations](#known-limitations--future-improvements).
+> Status: **a mentor-guided internship project, several phases complete.** A
+> Flask API, SQLite orders, an FAQ of **demonstration sample policies**, a
+> deterministic assistant, and a plain HTML/CSS/JS frontend with browser STT/TTS
+> are in place — including a **simulated browser voice-call mode**
+> (`static/js/call.js`) and an **optional Gemini natural-language layer that is
+> implemented but OFF by default** (`GEMINI_ENABLED=false`). The current suite is
+> **431 passing Python tests plus 37 headless JavaScript tests** (verified).
+> Order status comes **only** from SQLite, policy answers **only** from the
+> sample FAQ (fictional demonstration data, clearly labelled, never invented),
+> and Gemini only classifies intent/language and rephrases our own approved text.
+> Every Gemini interaction in the tests is mocked (no live API call has been
+> made). The deterministic assistant understands **English, Urdu script and
+> Roman Urdu** (typed) for order status, the five policy topics, greetings,
+> farewells and **gratitude** ("Thank you" / "Shukriya" → a "You're welcome"
+> reply). The G3 security limits (rate limiting, body/message-size caps, JSON
+> error handlers) are covered by automated tests, but **real microphone/audio
+> behaviour, spoken Urdu / Roman Urdu recognition, and live Gemini remain
+> unverified** — see [Voice](#voice--limitations--fallback-important) and
+> [Known limitations](#known-limitations--future-improvements).
 
 ## Features
 - **Text chat** that always works (the primary, guaranteed path).
@@ -34,13 +35,26 @@ falls back to honest text chat when voice features are unavailable.
   **fictional demonstration policies**, clearly labelled in the UI footer and in
   the response `source` (`faq_kb:<topic>:sample`) — a real business must replace
   them with its own approved policies before customer use.
-- **Greetings & farewells**: recognizes a greeting ("hi", "assalam o alaikum")
-  and a farewell ("bye", "goodbye", "see you later", "Allah Hafiz", "Khuda
-  Hafiz", "okay bye") with a friendly fixed reply — **identically whether Gemini
-  is enabled or disabled** — while avoiding false positives (a bare "thank you",
-  or "goodbye" buried inside a longer sentence, is *not* treated as leaving).
-- **Voice input (STT)** via the browser Web Speech API (English / Urdu).
+- **Greetings, farewells & gratitude**: recognizes a greeting ("hi", "assalam o
+  alaikum"), a farewell ("bye", "goodbye", "see you later", "Allah Hafiz", "Khuda
+  Hafiz", "okay bye"), and a standalone thank-you ("thank you", "thanks", "shukriya",
+  "bohat shukriya", "شکریہ") with a friendly fixed reply — each **identically
+  whether Gemini is enabled or disabled** — while avoiding false positives:
+  "goodbye" buried in a longer sentence is *not* treated as leaving, and a
+  thank-you that also carries a real question ("thanks, what is my order
+  status?") is answered as that question, not as gratitude.
+- **Text-chat voice input (STT)** via the browser Web Speech API (`en-US` /
+  `ur-PK`). Roman Urdu is a *written* form with **no browser speech model**, so
+  it is supported for **typed** input, not spoken recognition.
 - **Spoken replies (TTS)** via `speechSynthesis`, with a user toggle.
+- **Simulated browser voice-call mode** (`static/js/call.js`): a hands-free call
+  over one continuous recognition session — spoken greeting, **barge-in**,
+  end-of-turn speech **buffering** (including an order number dictated digit by
+  digit), mute, honest end-of-call teardown, stale-response protection, a
+  **liveness watchdog** that re-arms a silently-dead microphone, immediate
+  re-arming when the Voice-language changes, and graceful handling of every
+  `onerror` code. It posts the **same `/api/chat` request and gets the same
+  backend intent detection** as text chat, so voice and text are equivalent.
 - **Graceful degradation**: unsupported browser, denied mic, no speech, or a
   speech-service error each show a friendly message; text chat keeps working.
 - **Modern, responsive blue-and-white UI** built with plain HTML/CSS/JS.
@@ -64,22 +78,31 @@ Customers can ask in **English**, **Urdu script** (e.g. "میرا آرڈر کہ�
 - **Free-form / mixed phrasing:** when Gemini is enabled it classifies the intent
   and language and rephrases our own approved replies into the customer's
   language.
-- **Greetings & farewells** are recognized in English and Roman/Urdu forms
-  (e.g. "khuda hafiz", "allah hafiz", "see you later") and answered with the
-  same fixed reply whether Gemini is enabled or disabled.
+- **Greetings, farewells & gratitude** are recognized in English and Roman/Urdu
+  forms (e.g. "khuda hafiz", "allah hafiz", "see you later"; "shukriya", "bohat
+  shukriya", "شکریہ") and answered with the same fixed reply whether Gemini is
+  enabled or disabled. A thank-you is a **standalone** intent: it never overrides
+  a message that also asks a real order/policy question.
 - **Policy questions** are detected across English, Urdu script and Roman Urdu
   (keyword + cue matching) and routed to the right sample topic; an ambiguous
   "policy" ask with no single clear topic gets a short clarification question
   rather than a guess.
 - **Current limitations (honest):**
+  - **Spoken Urdu and Roman Urdu are not reliably recognized.** Browser speech
+    recognition (`ur-PK`) depends on a browser/OS voice pack that is absent from
+    most desktop Chrome/Edge installs, and **Roman Urdu has no speech model at
+    all** (it is Urdu written in Latin letters). *Typing* English, Urdu script or
+    Roman Urdu all work; *speaking* them may not (see
+    [Voice](#voice--limitations--fallback-important)).
   - Offline, a detected policy topic returns its **English** sample answer from
     `data/faq.json` (the wording is never invented). Urdu-script *shipping*
     wording is not yet auto-detected; ask shipping in English/Roman Urdu, or use
     Gemini for broader free-form coverage.
   - **Reply localization** into Urdu needs Gemini ON; offline fixed replies
     (greeting, farewell, the order-id request, clarification, and the sample
-    policy text) stay in English (they can still be *spoken* in the selected
-    language if the browser has that voice).
+    policy text) stay in English — except gratitude, which has its own fixed
+    Urdu-script reply when the thank-you was written in Urdu script (they can
+    still be *spoken* in the selected language if the browser has that voice).
 
 ## Technology stack
 | Layer | Choice |
@@ -88,7 +111,7 @@ Customers can ask in **English**, **Urdu script** (e.g. "میرا آرڈر کہ�
 | Database | SQLite (Python's built-in `sqlite3` — no extra install) |
 | Frontend | Plain HTML / CSS / JavaScript (no framework, no build step) |
 | Speech (browser) | Web Speech API (`SpeechRecognition`) + `speechSynthesis` |
-| Tests | pytest |
+| Tests | pytest (Python) + dependency-free Node scripts (headless JS for `call.js`) |
 | Optional (off by default) | Gemini layer via `google-genai` (`app/gemini.py`) — grounded, feature-flagged, mocked in tests |
 
 ## Architecture
@@ -96,7 +119,9 @@ A single request flows through clearly separated layers, and each layer keeps a
 hard rule so no answer is ever invented:
 
 ```
-browser (index.html + app.js + stt.js + tts.js)
+browser:  index.html + app.js (text chat, mic STT, TTS)
+                     + call.js (simulated voice call: continuous STT,
+                       turn buffering, barge-in, mute, TTS)   [both -> same /api/chat]
       |  fetch POST /api/chat  {message}
       v
 Flask API (app/routes.py)  -- validation & guards (Phase G3):
@@ -106,7 +131,7 @@ Flask API (app/routes.py)  -- validation & guards (Phase G3):
 Deterministic assistant (app/assistant.py)  -- routes by intent:
       |- order id present  ------------> SQLite  (app/orders.py)  [source of truth]
       |- policy topic      ------------> sample FAQ (data/faq.json via app/faq.py)
-      |- greeting / farewell / ambiguous -> fixed, friendly replies
+      |- greeting / farewell / gratitude / ambiguous -> fixed, friendly replies
       |- no match          ------------> honest fallback (never invents)
       ^
       +- OPTIONAL Gemini (app/gemini.py, OFF by default): only CLASSIFIES
@@ -127,7 +152,8 @@ throwaway database and never touch `data/shop.db`.
   **3.14**; the core stack has no compiled dependencies).
 - A modern desktop browser. **Voice input (STT) works best in Chrome or Edge**;
   other browsers may lack the Web Speech API — text chat still fully works.
-- Git is optional (a repo was initialized locally; nothing is pushed).
+- Git (optional) — the project is tracked in a Git repository; `.env`,
+  `data/*.db`, and `.venv/` are excluded via `.gitignore`.
 
 ## Setup (Windows PowerShell)
 ```powershell
@@ -154,24 +180,42 @@ refresh it with the fictional sample orders:
 ```
 
 ## Run the tests
+**Python** (backend, API, frontend serving + contract):
 ```powershell
-.\.venv\Scripts\python.exe -m pytest            # the full suite (currently 286 tests)
+.\.venv\Scripts\python.exe -m pytest            # the full suite (currently 431 tests)
 ```
-The suite is fully **offline**: a conftest autouse fixture clears the Gemini
+**JavaScript** (the simulated-call controller and its browser glue, headless —
+no browser, no dependencies, no network):
+```powershell
+node tests/js/test_call_state.js               # pure state machine (23 tests)
+node tests/js/test_call_glue.js                # browser half via a fake DOM + Web Speech + virtual clock (14 tests)
+node --check static/js/call.js                 # syntax check (repeat for app.js, stt.js, tts.js)
+```
+The JS tests inject stub recognizers/TTS/fetch and a virtual clock, so they
+exercise the voice-call **logic** (lifecycle & greeting, barge-in, turn
+buffering, mute, end-call teardown, stale-response protection, the liveness
+watchdog, the language switch, and the `/api/chat` request shape) — **not** a
+real microphone. They are non-vacuous: reverting a fix makes the matching tests
+fail.
+
+The Python suite is fully **offline**: a conftest autouse fixture clears the Gemini
 environment for every test, so no live Gemini/network call is ever made and no
 test touches the real `data/shop.db` (each test gets a throwaway seeded database
 via `tmp_path`). Coverage includes the deterministic assistant, order lookups,
-the sample-FAQ answering across English/Urdu/Roman Urdu, farewell/greeting
-consistency with Gemini both ON and OFF, the API contract, frontend-serving and
-frontend-contract checks, and the Phase G3 security checks (request validation,
-JSON error handling, rate limiting, and safe config defaults).
+the sample-FAQ answering across English/Urdu/Roman Urdu, greeting/farewell/
+gratitude consistency with Gemini both ON and OFF, voice-vs-text equivalence at
+the backend, the API contract, frontend-serving and frontend-contract checks, and
+the Phase G3 security checks (request validation, JSON error handling, rate
+limiting, and safe config defaults).
 
 Full verification battery used to sign off each phase:
 ```powershell
-.\.venv\Scripts\python.exe -m pytest                     # all tests
+.\.venv\Scripts\python.exe -m pytest                     # all Python tests
+node tests/js/test_call_state.js                         # JS call state machine
+node tests/js/test_call_glue.js                          # JS browser glue
 .\.venv\Scripts\python.exe -m pip check                  # dependency integrity
 .\.venv\Scripts\python.exe -W error::SyntaxWarning -m compileall -q app  # strict compile
-node --check static/js/app.js                            # JS syntax (repeat for tts.js, stt.js)
+node --check static/js/app.js                            # JS syntax (repeat for tts.js, stt.js, call.js)
 ```
 
 > Automated checks never exercise a real browser microphone or audible speech, so
@@ -211,6 +255,16 @@ so the app runs even without a `.env` file. **No secrets are committed.**
 | `POST` | `/api/chat` | Chat: body `{"message": "..."}` → **200** `{intent, reply, source}`; **413** too long, **429** rate-limited (see below) |
 | `GET` | `/` | The chat frontend |
 
+**`/api/chat` contract.** Request `{"message": "<text>"}`; the response is always
+`{"intent", "reply", "source"}`. Possible `intent` values: `order_status` (a
+matched id, answered from SQLite), `order_status_missing_id` (order wording but
+no id — asks for the number), `order_status_unclear` (an incomplete / ambiguous
+spoken number — asks to repeat it), `faq` (shipping / returns / cancellation /
+changes / payment), `greeting`, `farewell`, `gratitude`, `ambiguous` (a short
+clarifying question), `empty`, and `fallback` (an honest "I'm not sure" — never
+invented). The voice call posts this same endpoint and reads the same fields, so
+voice and text share one contract.
+
 **Errors & limits (Phase G3).** Every `/api` error is a consistent JSON object
 `{"error": "...", "message": "..."}` with an appropriate status code, and a real
 server error is logged server-side but **never** returned with a stack trace or
@@ -238,8 +292,24 @@ The frontend surfaces the friendly `message` for these errors; text chat keeps w
   text only — nothing breaks. Both the auto-spoken reply and the per-reply Speak
   button use the **selected voice language** (`en-US` / `ur-PK`), falling back to
   the browser default when no matching voice is installed.
-- **Urdu (`ur-PK`)** recognition depends on a browser/OS voice pack; where it is
-  missing, recognition may fall back or error, but the app stays usable.
+- **Urdu (`ur-PK`)** recognition depends on a browser/OS voice pack that is
+  missing on most desktop Chrome/Edge installs; where it is absent, recognition
+  raises `language-not-supported` (or simply hears nothing) and the call says so
+  instead of failing silently. **Roman Urdu cannot be recognized by speech at
+  all** — it is a *written* form. Type Urdu or Roman Urdu in the text box (the
+  backend reads both) rather than speaking it.
+- **Simulated voice call** (`static/js/call.js`) shares the same language
+  selector and `/api/chat`; changing the Voice language re-arms the running
+  recognition immediately, and a liveness watchdog re-arms a microphone session
+  that dies without an event. Greeting, barge-in, turn buffering, mute and
+  end-of-call teardown are covered by the headless JS tests.
+- **Local diagnostics (opt-in, dev only):** open the page with `?voicediag=1` to
+  log pipeline stages (recognition start/result, buffer submit, request/response,
+  state changes) to the browser console — lengths and codes only, never the
+  words. Add `?voicetext=1` (a **separate** flag) to also print a short preview of
+  the recognized text to the **console only**, to debug what the mic actually
+  heard; run `__voiceDiag()` in the console to dump the recorded lines. Nothing is
+  sent or stored, and neither flag should be used with real customers.
 - **Not yet hardware-verified:** automated checks confirmed the controls exist
   and the text flow works, but **real microphone capture (STT) and audio playback
   (TTS) were not exercised** — test those manually in Chrome/Edge before relying
@@ -276,9 +346,9 @@ app/        Flask backend
   assistant.py    intent router (deterministic + optional Gemini grounding)
   routes.py       REST API (/api/health, /api/orders, /api/chat)
   __init__.py     app factory + serves the frontend at "/"
-static/     plain frontend (index.html, css/, js/ with app/tts/stt)
+static/     plain frontend (index.html, css/, js/: app.js, tts.js, stt.js, call.js)
 data/       faq.json (fictional sample/demonstration policies) + generated shop.db (not tracked)
-tests/      pytest suite (backend, API, frontend serving + contract)
+tests/      pytest suite (backend, API, frontend serving + contract) + js/ (headless Node tests for call.js)
 run.py      start the dev server
 ```
 
@@ -308,6 +378,10 @@ public / production deployment**:
   and disabled by default; it has never been run against a real key here.
 - **Voice hardware is unverified.** Real microphone input and audio output have
   not been exercised (see the Voice section above).
+- **Spoken Urdu / Roman Urdu recognition is unreliable.** Browser STT has no
+  Roman-Urdu speech model and usually no `ur-PK` voice pack on desktop, so Urdu
+  spoken aloud may not be recognized; English speech and *typed* Urdu / Roman
+  Urdu work. This is a browser limitation, not something the backend can force.
 - **FAQ policies are FICTIONAL demonstration samples**, not owner-approved
   real-world policy. They are answered directly but labelled as sample data (UI
   footer + `source`); replace them before any real customer use.

@@ -162,17 +162,39 @@ _CLASSIFY_SCHEMA = {
 
 # The prompt frames Gemini strictly as a CLASSIFIER. It is told not to answer
 # the customer and not to invent anything — the app decides facts afterwards.
+# The intent definitions matter: customers ask the SAME question in many
+# different wordings, and the two labels most often confused are `order_status`
+# (asking about THEIR OWN parcel) and `shipping` (asking about the POLICY in
+# general), so that boundary is stated explicitly instead of left to guesswork.
 _CLASSIFY_PROMPT = (
     "You are an intent classifier for a small shop's customer-care line. "
     "Do NOT answer the customer and do NOT invent any facts, dates, statuses, "
     "prices, refunds, or approvals. Your ONLY job is to classify the message. "
+    "The customer may write in English, Urdu script, Roman Urdu, or a mix, and "
+    "in many different wordings; judge the MEANING, not specific keywords.\n"
+    "Intent meanings:\n"
+    "- order_status: asking about THEIR OWN order/parcel/shipment (where it is, "
+    "whether it arrived, when it will come, an update, tracking it).\n"
+    "- shipping: asking about delivery in GENERAL - times, cost, areas, courier "
+    "or method (not about one specific order).\n"
+    "- returns: sending an item back, refunds, money back, exchanges.\n"
+    "- cancellation: wanting an order to be stopped/voided/no longer wanted.\n"
+    "- changes: wanting to alter an order or its address/details.\n"
+    "- payment: charges, methods, whether a payment went through.\n"
+    "- greeting: only a hello or how-are-you with nothing else asked.\n"
+    "- ambiguous: the customer seems to want something but it cannot be routed "
+    "without a short follow-up question.\n"
+    "- other: not a support request at all.\n"
     "Return a JSON object with: "
     "'intent' set to exactly one of: order_status, shipping, returns, "
     "cancellation, payment, changes, greeting, ambiguous, other; "
     "'language' set to one of: en, ur, roman-urdu, mixed, other; "
-    "'order_id' (only if the customer actually wrote an order id, otherwise "
-    "empty); and 'needs_clarification' (true only if the request is too vague "
-    "to route without asking a short follow-up question)."
+    "'order_id' set to ORD-<four digits> ONLY if the customer actually stated a "
+    "number in this message - including one said as words such as 'one zero "
+    "zero two' or written '1002' - otherwise leave it EMPTY; never infer, "
+    "complete or invent a number from anything else; and 'needs_clarification' "
+    "(true only if the request is too vague to route without asking a short "
+    "follow-up question)."
 )
 
 

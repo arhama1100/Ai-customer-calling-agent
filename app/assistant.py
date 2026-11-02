@@ -11,8 +11,12 @@ Routing rules (checked in order):
    and off - Gemini has no `farewell` intent), then we classify the message's
    intent + language, route order questions by asking for an id, and answer a
    policy question from the SAMPLE demonstration FAQ (rephrased into the
-   customer's language). Any failure here falls through to the deterministic
-   rules below (and never pretends Gemini answered).
+   customer's language). A verdict the model is NOT sure about ("other",
+   "ambiguous", or needs_clarification) no longer decides anything: the
+   deterministic rules below run first, and the model's hesitation is only used
+   if they fail too (so a shaky classification can neither invent an answer nor
+   discard a correct rule match). Any failure here falls through to the rules
+   below (and never pretends Gemini answered).
 3. Order-status wording in Urdu / Roman Urdu with NO id -> ask for the order id
 4. Matches the FAQ -> return that topic's SAMPLE policy answer (source marks it
    as demonstration data, e.g. faq_kb:<topic>:sample). An ambiguous policy
@@ -48,7 +52,17 @@ ORDER_ID_RE = re.compile(r"\bORD[-\s]?(\d{4})\b", re.IGNORECASE)
 # for it. We NEVER guess an order or invent a status (hard rule in the header).
 ORDER_ID_REQUEST_REPLY = (
     "I can check your order status — please share your order number "
-    "(for example ORD-1002) and I'll look it up for you."
+    "from your confirmation (the digits that follow ORD) and I'll look it up."
+)
+
+# When the customer clearly gave an order number but it did NOT resolve to a
+# confident, complete id (e.g. a partial "one two three", or digits split by a
+# mishearing) we ask them to REPEAT it rather than guess or pad a number. This
+# keeps the hard rule intact: an order id is only ever used when we actually
+# heard it, never invented.
+ORDER_ID_REPEAT_REPLY = (
+    "Sorry, I didn't catch your full order number. Could you please repeat "
+    "it? It's the four digits that follow ORD, said one at a time."
 )
 
 # ── Multilingual routing vocabulary (Phase E) ──────────────────────────────
@@ -58,6 +72,7 @@ ORDER_ID_REQUEST_REPLY = (
 # POLICY_ACTION_TOKENS). Order ids are matched earlier and hit SQLite.
 ORDER_REF_TOKENS = {
     "order", "orders", "parcel", "package", "shipment", "consignment",
+    "tracking",
     "آرڈر", "پارسل", "پیکج", "پیکیج", "شپمنٹ",
 }
 
@@ -65,18 +80,32 @@ ORDER_REF_TOKENS = {
 # like "deliver / shipped / received" describe THIS order here, so "my parcel
 # was not delivered" is an order-status question, while "how long does delivery
 # take" (no order reference) stays on the shipping-policy path.
+#
+# A cue alone is NEVER enough: _is_order_status_no_id requires an order/parcel
+# REFERENCE plus a cue, so everyday words like "when" or "get" cannot turn an
+# unrelated sentence into an order question ("when do you open", "do you accept
+# apple pay" have no order reference and stay on their own paths).
 ORDER_STATUS_CUES = {
     # English
     "where", "status", "track", "tracking", "arrived", "arrive", "reached",
     "reach", "here", "delivered", "deliver", "delivery", "shipped", "ship",
     "dispatched", "dispatch", "received", "receive", "coming", "pending",
+    # Natural rephrasings that carry no "status/where/track" wording at all
+    # ("when will I get my order", "any update on my shipment", "can you tell
+    # me about my order") - previously these fell through to the fallback.
+    "update", "updates", "when", "get", "got", "tell", "came", "come",
+    "yet", "still", "sent", "moving", "progress",
     # Roman Urdu
     "kahan", "kahaan", "kab", "pohncha", "pohnche", "pohancha", "pohanche",
     "pohnch", "aya", "aaya", "aayi", "hua", "hui", "hogia", "hogaya", "bata",
-    "batao", "mila", "milega", "mili",
+    "batao", "mila", "milega", "mili", "kab", "khaka", "dikhao", "check",
+    # "aa gaya" / "ho gaya" ("has it come") - the natural spoken form, which
+    # carries none of the words above.
+    "gaya", "gayi", "aayega", "aegi", "ayega",
     # Urdu script
     "کہاں", "کب", "اسٹیٹس", "ٹریکنگ", "پہنچ", "پہنچا", "پہنچے", "آیا",
     "آئی", "ہوا", "ہوئی", "بھیجا", "بھیج", "دیا", "گیا", "ملا", "ملی", "ملے",
+    "باتائیں", "بتائیں", "دکھائیں", "اپڈیٹ", "کیا", "کچھ", "حالت", "صورتحال",
 }
 
 # Words that mean the customer wants to CANCEL / RETURN / CHANGE / PAY, i.e. a
@@ -87,23 +116,55 @@ POLICY_ACTION_TOKENS = {
     "cancel", "cancelled", "cancellation", "return", "returns", "refunded",
     "refund", "refundable", "exchange", "change", "changed", "changes",
     "modify", "address", "payment", "pay", "paid", "card", "invoice",
-    "منسوخ", "رد", "واپس", "واپسی", "تبدیل", "بدل", "ادائیگی", "بل",
+    # Softer ways of asking to stop an order that use no "cancel" wording at all
+    # ("please stop my order", "I don't want it anymore", "remove my order").
+    "stop", "remove", "deleted", "delete", "manat",
+    "منسوخ", "رد", "واپس", "واپسی", "تبدیل", "بدل", "ادائیگی", "بل", "بند", "رک",
+    "کنسل", "پیسے", "پیسہ",
     "wapas", "wapsi", "tabdeel", "badalna", "ada", "adaigi", "paisa",
-    "karwana", "karwa",
+    "karwana", "karwa", "band", "rok", "paise",
 }
 
 # Urdu-script / Roman-Urdu policy cues that the English-only faq.json keywords
 # cannot match. Maps a policy topic id to cue words; used to decide WHICH sample
 # policy topic to answer (the answer text itself is fetched from faq.json by id).
 POLICY_TOPIC_CUES = {
-    "cancellation": {"cancel", "cancellation", "منسوخ", "رد", "karwana", "karwa"},
+    "cancellation": {"cancel", "cancellation", "منسوخ", "رد", "karwana", "karwa",
+                     "stop", "remove", "delete", "manat", "band", "rok", "بند", "رک",
+                     "کنسل"},
     "returns": {"return", "returns", "refund", "exchange", "واپس", "واپسی",
                 "wapas", "wapsi"},
     "changes": {"change", "modify", "address", "edit", "تبدیل", "بدل",
-                "tabdeel", "badalna"},
+                "tabdeel", "badalna", "update", "location", "shifted", "wrong",
+                "galat", "theek", "غلط", "ٹھیک", "پتہ"},
     "payment": {"payment", "pay", "card", "credit", "ada", "adaigi", "paisa",
-                "ادائیگی", "بل", "invoice"},
+                "ادائیگی", "بل", "invoice", "charged", "charge", "cash", "cod",
+                "emi", "کیش", "رقم", "پیسے", "پیسہ", "paise"},
+    # Shipping is normally caught by the English faq.json keywords, but Urdu
+    # script and Roman Urdu have no English keyword to hit, so the topic needs
+    # its own cues. Listed LAST so a tie always prefers a more specific topic.
+    "shipping": {"ship", "shipping", "courier", "deliver", "delivery", "trseel",
+                 "tarseel", "delivered", "شپنگ", "ترسیل", "ترسیلات", "ڈیلیوری",
+                 "کورئیر", "پوسٹ", "شپ"},
 }
+
+# Two words that must BOTH appear for a topic, in any order or distance. Needed
+# because a customer can describe a return without ever saying "return": "can I
+# send this item back to you". Requiring the pair (never "back" alone) keeps an
+# unrelated "I will come back later" from being read as a refund request.
+POLICY_PHRASE_TOPICS = [
+    ({"back", "send"}, "returns"),
+    ({"back", "sent"}, "returns"),
+    ({"back", "money"}, "returns"),
+    ({"back", "amount"}, "returns"),
+    ({"back", "refund"}, "returns"),
+    # "theek kar dein" (please fix it) is a change REQUEST, not a status ask,
+    # even though the sentence also mentions the order. Neither word alone is
+    # safe: "theek" also means "fine" and "kar" is an everyday helper verb.
+    ({"theek", "kar"}, "changes"),
+    ({"theek", "kardo"}, "changes"),
+    ({"galat", "kar"}, "changes"),
+]
 
 # Generic policy words with no specific topic. A message that merely says
 # "policy/policies" (and matches no single topic) is AMBIGUOUS, so we ask which
@@ -138,6 +199,28 @@ FAREWELL_PHRASES = {
     "see you", "see you later", "allah hafiz", "khuda hafiz",
 }
 
+# Gratitude is its OWN intent, kept deliberately separate from farewell: a bare
+# "thank you" thanks us, it does not end the call (the customer may well ask
+# another question next). Matched WHOLE-word / whole-phrase exactly like the
+# greeting and farewell tests above, so 'thanks' inside a longer sentence is
+# never mistaken for a standalone thank-you, and a message that ALSO carries a
+# real request ("thanks, what is my order status?") is answered by that request
+# first - the gratitude rule only fires when nothing else matched.
+GRATITUDE_TOKENS = {
+    "thank", "thanks", "thx",
+    "shukriya", "shukria", "shukriyaan", "ehsan",
+}
+GRATITUDE_PHRASES = {
+    "thank you", "thank you so much", "thanks a lot", "thank you very much",
+    "many thanks", "lots of thanks", "thanks so much", "thank you both",
+    "big thanks", "thanks alot",
+    "bohat shukriya", "bahut shukriya", "bohat shukria", "aap ka shukriya",
+    "shukriya bohat", "many many thanks",
+}
+GRATITUDE_URDU_PHRASES = {
+    "شکریہ", "بہت شکریہ", "آپ کا شکریہ", "ہزار ہزار شکریہ",
+}
+
 GREETING_REPLY = (
     "Hello! I can help with order status, shipping, returns, cancellations, "
     "and payments. What would you like to know?"
@@ -147,10 +230,21 @@ FAREWELL_REPLY = (
     "Thank you for contacting us! Have a great day. Goodbye!"
 )
 
+# Kept short on purpose: this one is SPOKEN back over the voice call after every
+# thank-you, and it invites the next question instead of closing the call.
+GRATITUDE_REPLY = (
+    "You're welcome! Is there anything else I can help you with?"
+)
+
+# Approved fixed wording for a thank-you in Urdu script, used when the message
+# itself is already Urdu (see _respond_gratitude). Like every other fixed reply
+# this is our own pre-approved text and never model-invented.
+GRATITUDE_REPLY_URDU = "آپ کا شکریہ! کیا میں آپ کی اور کوئی مدد کر سکتا ہوں?"
+
 FALLBACK_REPLY = (
     "I'm not sure how to help with that yet. I can check an order status "
-    "(try 'ORD-1002') or answer questions about shipping, returns, "
-    "cancellations, and payments."
+    "(just tell me your order number) or answer questions about shipping, "
+    "returns, cancellations, and payments."
 )
 
 # ── Gemini-enabled routing (Phase B2 / G2) ────────────────────────────────
@@ -182,8 +276,10 @@ def _looks_like_farewell(text):
 
     Shares the greeting length guard (<= 4 tokens), so only a short closing
     remark counts: 'bye' / 'goodbye' / 'okay bye' / 'thank you bye' /
-    'see you later' / 'allah hafiz' / 'khuda hafiz'. A bare 'thank you' (no
-    bye/goodbye) and a long sentence merely mentioning 'goodbye' do NOT match.
+    'see you later' / 'allah hafiz' / 'khuda hafiz'. A long sentence merely
+    mentioning 'goodbye' does NOT match. A bare 'thank you' (no bye/goodbye) is
+    NOT leaving either - since Phase E.2 it is answered by its own gratitude
+    intent instead of the farewell or the fallback.
     """
     tokens = _match_tokens(text)
     if not tokens or len(tokens) > 4:
@@ -191,6 +287,41 @@ def _looks_like_farewell(text):
     if " ".join(tokens) in FAREWELL_PHRASES:
         return True
     return any(tok in FAREWELL_TOKENS for tok in tokens)
+
+
+def _looks_like_gratitude(text):
+    """Whole-word / whole-phrase gratitude test (token-based, never a substring).
+
+    Uses the SAME short-message guard as greeting/farewell (<= 4 tokens), so only
+    a genuine standalone thank-you counts: 'thanks' / 'thank you so much' /
+    'bohat shukriya' / 'شکریہ'. A long sentence that merely mentions thanks
+    ("thanks for letting me know about the delay in my shipment") is NOT gratitude
+    and keeps its real intent, and 'shukriya' embedded in an unrelated word
+    cannot fire because tokens are compared whole.
+    """
+    tokens = _match_tokens(text)
+    if not tokens or len(tokens) > 4:
+        return False
+    joined = " ".join(tokens)
+    if joined in GRATITUDE_PHRASES:
+        return True
+    # Urdu script is not lowercased away by the normalizer, so set-phrase forms
+    # ("بہت شکریہ") are compared as a whole joined phrase too.
+    if joined in GRATITUDE_URDU_PHRASES or any(t in GRATITUDE_URDU_PHRASES for t in tokens):
+        return True
+    return any(tok in GRATITUDE_TOKENS for tok in tokens)
+
+
+def _respond_gratitude(text):
+    """The one approved reply to a thank-you, in the language it was said in.
+
+    Returns the fixed English wording for Roman/Latin scripts and the fixed Urdu
+    script wording when the customer thanked us in Urdu. No order facts and no
+    policy text are involved, so no live translation call is made.
+    """
+    if any("\u0600" <= ch <= "\u06ff" for ch in (text or "")):  # Urdu/Arabic script
+        return {"intent": "gratitude", "reply": GRATITUDE_REPLY_URDU, "source": "fixed"}
+    return {"intent": "gratitude", "reply": GRATITUDE_REPLY, "source": "fixed"}
 
 
 def _normalize_for_matching(text):
@@ -230,22 +361,208 @@ def _is_order_status_no_id(tokens):
     token_set = set(tokens)
     if POLICY_ACTION_TOKENS & token_set:
         return False
+    # A policy verb pair ("send ... back", "theek kar") outranks the status
+    # reading too, because such a sentence usually ALSO names the order.
+    if any(pair <= token_set for pair, _topic in POLICY_PHRASE_TOPICS):
+        return False
     has_ref = bool(ORDER_REF_TOKENS & token_set)
     has_cue = bool(ORDER_STATUS_CUES & token_set)
     return has_ref and has_cue
 
 
+# ── Spoken order-number normalization ──────────────────────────────────────
+# The browser's speech recognition (and typed text chat) frequently delivers an
+# order number as WORDS — "one zero zero two", "order number one two three",
+# "one hundred twenty-three" — or with the word "order"/"order number" instead
+# of the literal ORD token, or (Urdu) using Arabic-Indic digit glyphs. None of
+# those forms match ORDER_ID_RE, so a spoken number used to fall through to the
+# generic fallback: the reported "the AI does not recognize the order number"
+# bug. We normalize ONLY the number words into digits, and we attach them to an
+# order ONLY when the surrounding words clearly mark an order reference; we
+# NEVER pad, guess or invent an id. An incomplete/ambiguous number -> ask repeat.
+_NUMBER_WORDS = {
+    "zero": 0, "one": 1, "two": 2, "three": 3, "four": 4, "five": 5,
+    "six": 6, "seven": 7, "eight": 8, "nine": 9, "ten": 10, "eleven": 11,
+    "twelve": 12, "thirteen": 13, "fourteen": 14, "fifteen": 15,
+    "sixteen": 16, "seventeen": 17, "eighteen": 18, "nineteen": 19,
+    "twenty": 20, "thirty": 30, "forty": 40, "fifty": 50, "sixty": 60,
+    "seventy": 70, "eighty": 80, "ninety": 90,
+}
+_NUMBER_SCALES = {"hundred": 100, "thousand": 1000, "million": 1000000}
+# Arabic-Indic (٠١٢٣٤٥٦٧٨٩) and Extended/Persian-Urdu (۰۱۲۳۴۵۶۷۸۹) digits.
+_DIGIT_GLYPHS = {
+    "\u0660": "0", "\u0661": "1", "\u0662": "2", "\u0663": "3", "\u0664": "4",
+    "\u0665": "5", "\u0666": "6", "\u0667": "7", "\u0668": "8", "\u0669": "9",
+    "\u06f0": "0", "\u06f1": "1", "\u06f2": "2", "\u06f3": "3", "\u06f4": "4",
+    "\u06f5": "5", "\u06f6": "6", "\u06f7": "7", "\u06f8": "8", "\u06f9": "9",
+}
+# Words that make a number reading an ORDER reference (reuse the existing
+# order-reference vocabulary plus the literal id stem and the word "number").
+_ORDER_NUMBER_CUES = ORDER_REF_TOKENS | {"ord", "order", "number"}
+
+
+def _number_tokens(text):
+    """Split a message into lowercase tokens for NUMBER scanning.
+
+    Normalizes Unicode, swaps Arabic-Indic/Urdu digit glyphs for ASCII, turns
+    separators (hyphen/slash) and punctuation into spaces so "twenty-three" and
+    "1002" tokenize cleanly, and keeps letters from every script intact.
+    """
+    t = unicodedata.normalize("NFKC", text).lower()
+    for glyph, d in _DIGIT_GLYPHS.items():
+        t = t.replace(glyph, d)
+    t = re.sub(r"[-\u2013\u2014_/]", " ", t)   # – —
+    t = re.sub(r"[^\w\s]", " ", t)
+    return [w for w in re.sub(r"\s+", " ", t).split() if w]
+
+
+def _is_number_token(tok):
+    return tok.isdigit() or tok in _NUMBER_WORDS or tok in _NUMBER_SCALES or tok == "and"
+
+
+def _parse_compound(core):
+    """Value of a scale-bearing phrase: 'one hundred twenty three' -> 123,
+    'one thousand two' -> 1002, 'twenty three' -> 23."""
+    total = 0
+    current = 0
+    for tok in core:
+        if tok in _NUMBER_SCALES:
+            scale = _NUMBER_SCALES[tok]
+            if scale == 100:
+                current = (current or 1) * 100
+            else:
+                total += (current or 1) * scale
+                current = 0
+        elif tok.isdigit():
+            current = current * 10 + int(tok)
+        else:
+            current += _NUMBER_WORDS.get(tok, 0)
+    return total + current
+
+
+def _group_to_digits(group):
+    """Turn one run of number tokens into its digit string.
+
+    A pure digit-word sequence reads digit-by-digit (an order id is spoken that
+    way): 'one zero zero two' -> '1002'. A scale phrase is read as its value:
+    'one hundred twenty three' -> '123'.
+    """
+    core = [t for t in group if t != "and"]
+    if any(t in _NUMBER_SCALES for t in core):
+        return str(_parse_compound(core))
+    seq = ""
+    for tok in core:
+        value = _NUMBER_WORDS.get(tok, -1)
+        if tok.isdigit():
+            seq += tok
+        elif 0 <= value <= 9:
+            seq += str(value)
+        else:
+            return str(_parse_compound(core))  # tens/teens mixed -> value form
+    return seq
+
+
+def _digit_groups(tokens):
+    """Return confident digit strings found in the token stream.
+
+    Only maximal runs of number tokens become candidates. A single common
+    number word ('one', 'five') or a lone literal digit is intentionally
+    IGNORED so filler words are never mistaken for an order number.
+    """
+    groups = []
+    cur = []
+    for tok in tokens:
+        if _is_number_token(tok):
+            cur.append(tok)
+        elif cur:
+            groups.append(cur)
+            cur = []
+    if cur:
+        groups.append(cur)
+
+    out = []
+    for group in groups:
+        core = [t for t in group if t != "and"]
+        if not core:
+            continue
+        if len(core) == 1:
+            tok = core[0]
+            # Keep a literal multi-digit token ("1002"); drop a lone number WORD
+            # or single digit ("one", "5") so everyday filler is not mistaken
+            # for an order number.
+            if tok.isdigit() and len(tok) >= 2:
+                digits = tok
+            else:
+                continue
+        else:
+            digits = _group_to_digits(group)
+        if digits and digits.isdigit() and len(digits) >= 2:
+            out.append(digits)
+    return out
+
+
+def _resolve_order_id(text):
+    """Decide whether a message names a specific order, and which canonical id.
+
+    Returns one of:
+      ("ORD-####", "found")    - a confident id: hand to the SQLite lookup.
+      (None, "uncertain")      - an order number was clearly given but did not
+                                 resolve to a complete id -> ask to repeat.
+      (None, "none")           - no order-number signal; continue normal routing.
+    """
+    # 1) The trusted literal form (ORD-1002 / ord 1002 / order ord 1002 ...) —
+    #    unchanged, so every existing spoken variation that keeps the ORD stem
+    #    still behaves exactly as before.
+    match = ORDER_ID_RE.search(text)
+    if match:
+        return f"ORD-{match.group(1)}", "found"
+
+    tokens = _number_tokens(text)
+    token_set = set(tokens)
+    has_order_cue = bool(_ORDER_NUMBER_CUES & token_set)
+    # A reply that is ONLY a number counts as an order reference too: it is what
+    # the customer says right after we ask them to repeat the number in a call,
+    # so those digits must be usable rather than fall through to the fallback.
+    number_only = bool(tokens) and all(_is_number_token(t) for t in tokens)
+    if not (has_order_cue or number_only):
+        return None, "none"  # no order reference at all -> never treat a stray
+                             # number as an order (no guessing).
+
+    groups = _digit_groups(tokens)
+    if not groups:
+        return None, "none"  # an order reference with no number -> the existing
+                            # "please share your order number" path handles it.
+
+    best = max(groups, key=len)
+    if len(best) == 4 and best.isdigit():
+        return f"ORD-{best}", "found"
+
+    # A number was given next to an order reference but it is not a clean
+    # 4-digit id. If the message is actually a POLICY action (cancel/return/
+    # refund ...), leave it to the policy branch instead of hijacking it with a
+    # "repeat your number" prompt. Otherwise the number was unclear -> ask.
+    if POLICY_ACTION_TOKENS & token_set:
+        return None, "none"
+    return None, "uncertain"
+
+
 def _detect_policy_topic(text, tokens, faq_path):
     """Pick a policy topic id (shipping/returns/cancellation/changes/payment) or
-    None. English questions are matched by the SAMPLE FAQ keywords; Urdu
-    script and Roman Urdu use POLICY_TOPIC_CUES because faq.json is English-only.
-    This ONLY decides which SAMPLE topic to answer; the answer text is fetched
-    from faq.json by id in respond() (never invented here).
+    None. POLICY_TOPIC_CUES is the primary detector and now covers English as
+    well as Roman Urdu and Urdu script (faq.json's keywords are English-only and
+    are consulted only afterwards). POLICY_PHRASE_TOPICS catches a topic that no
+    single word names ("send this back"). This ONLY decides which SAMPLE topic to
+    answer; the answer text is fetched from faq.json by id in respond() (never
+    invented here).
+
+    The cue score is checked FIRST, before the FAQ keywords, because the FAQ
+    matches keywords as substrings: "any update on my shipment" contains "ship"
+    and used to win the shipping answer even though the customer was describing
+    their own order. Order-reference messages are already intercepted earlier by
+    rule 3, so anything reaching here has no confident order reference, and a
+    specific cue ("update my location") outranks a loose keyword hit.
     """
     token_set = set(tokens)
-    if not (POLICY_ACTION_TOKENS & token_set):
-        hit = faq_module.find_answer(text, faq_path)
-        return hit["id"] if hit else None
     best_topic, best_score = None, 0
     for topic, cues in POLICY_TOPIC_CUES.items():
         score = len(token_set & cues)
@@ -253,6 +570,11 @@ def _detect_policy_topic(text, tokens, faq_path):
             best_topic, best_score = topic, score
     if best_topic:
         return best_topic
+    # No single cue word, but a pair of words can still name the topic
+    # unambiguously ("send ... back", "money back").
+    for pair, pair_topic in POLICY_PHRASE_TOPICS:
+        if pair <= token_set:
+            return pair_topic
     hit = faq_module.find_answer(text, faq_path)
     if hit:
         return hit["id"]
@@ -272,60 +594,100 @@ def _localized(reply_text, language):
     return translated or reply_text
 
 
-def _respond_via_gemini(text):
+def _model_order_id_is_verifiable(order_id, text):
+    """Accept a model-claimed order id ONLY if the customer actually said it.
+
+    The classifier is told to leave `order_id` empty unless the customer stated a
+    number, but a model can still invent one, so we never look up an id on the
+    model's word alone. The digits are re-checked against the customer's OWN
+    message using the same number normalization as the spoken-number path, so
+    "one zero zero two" and "1002" both count as stated. Anything else is
+    discarded and we ask the customer for their number instead - SQLite stays the
+    only source of order facts.
+    """
+    if not order_id:
+        return None
+    digits = "".join(ch for ch in str(order_id) if ch.isdigit())
+    if len(digits) != 4:
+        return None
+    if digits in _digit_groups(_number_tokens(text)):
+        return f"ORD-{digits}"
+    return None
+
+
+def _respond_via_gemini(text, db_path=None):
     """Use Gemini to classify intent + language, then return a GROUNDED result.
 
-    Returns None on any failure (disabled/timeout/None classification) so the
-    caller falls back to the deterministic assistant. Order ids were already
-    handled by the reliable regex + SQLite lookup above, so an `order_status`
-    intent here means NO id was present. Policies are answered from the SAMPLE
+    Returns ``(result, classification)``:
+      result        the grounded answer dict, or None when the model has no
+                    actionable verdict (disabled, a timeout, a rogue label, or
+                    simply "other"/"ambiguous"). None means "the deterministic
+                    rules below decide", so a model hesitation can no longer
+                    discard an answer the rules already understand.
+      classification  the validated classification (or None), remembered only so
+                    the final step can ask a clarifying question when the model
+                    said the message was too vague, instead of shrugging.
+
+    Order ids were already handled by the reliable rules + SQLite lookup above,
+    so an `order_status` intent here usually means no id was resolved: we ask for
+    it. A model-claimed id is used only when the customer's own words contain it
+    (see _model_order_id_is_verifiable). Policies are answered from the SAMPLE
     FAQ (grounded in data/faq.json), never invented by the model.
     """
     classification = gemini_module.classify_message(text)
     if not classification:
-        return None
+        return None, None
 
     intent = classification.get("intent")
     language = classification.get("language")
 
+    # LOW CONFIDENCE: the model itself says this is too vague to route safely, so
+    # we ask a short question instead of acting on a shaky classification.
+    if classification.get("needs_clarification"):
+        return {
+            "intent": "ambiguous",
+            "reply": _localized(CLARIFICATION_REPLY, language),
+            "source": "gemini:fixed",
+        }, classification
+
     if intent == "order_status":
+        verified = _model_order_id_is_verifiable(
+            classification.get("order_id"), text)
+        if verified:
+            # The model only pointed at a number the customer already said; the
+            # status itself still comes straight from SQLite.
+            return {
+                "intent": "order_status",
+                "reply": describe_order(verified, db_path),
+                "source": "orders_db",
+            }, classification
         return {
             "intent": "order_status_missing_id",
             "reply": _localized(ORDER_ID_REQUEST_REPLY, language),
             "source": "gemini:fixed",
-        }
+        }, classification
     if intent in POLICY_INTENTS:
         # Grounded in the SAMPLE FAQ: return that topic's sample answer, our own
         # text rephrased into the customer's language. If the topic has no stored
         # answer, let the deterministic branch decide (never invent one here).
         sample = faq_module.get_answer_by_id(intent)
         if not sample:
-            return None
+            return None, classification
         return {
             "intent": intent,
             "reply": _localized(sample, language),
             "source": "gemini:policy_sample",
-        }
+        }, classification
     if intent == "greeting":
         return {
             "intent": "greeting",
             "reply": _localized(GREETING_REPLY, language),
             "source": "gemini:fixed",
-        }
-    if intent == "ambiguous":
-        return {
-            "intent": "ambiguous",
-            "reply": _localized(CLARIFICATION_REPLY, language),
-            "source": "gemini:fixed",
-        }
-    if intent == "other":
-        return {
-            "intent": "fallback",
-            "reply": _localized(FALLBACK_REPLY, language),
-            "source": "gemini:fixed",
-        }
-    # Unexpected value -> let the deterministic assistant decide.
-    return None
+        }, classification
+    # "ambiguous" / "other" / an unexpected value: NOT actionable on its own.
+    # Fall through to the deterministic rules, which understand far more than the
+    # model's two "not sure" labels; the hint is only used if they too fail.
+    return None, classification
 
 
 def respond(text, db_path=None, faq_path=None):
@@ -340,16 +702,23 @@ def respond(text, db_path=None, faq_path=None):
     if not text:
         return {"intent": "empty", "reply": FALLBACK_REPLY, "source": "none"}
 
-    # 1) Order status — highest priority when an order id is present.
-    match = ORDER_ID_RE.search(text)
-    if match:
-        # Normalize any accepted variation to the canonical ORD-#### form
-        # that the SQLite table actually stores (the lookup stays unchanged).
-        order_id = f"ORD-{match.group(1)}"
+    # 1) Order status — highest priority when an order id is present. This also
+    #    resolves a SPOKEN order number ("one zero zero two", "order number
+    #    1002") into the canonical ORD-#### form; the SQLite lookup itself is
+    #    unchanged. An unclear/partial number asks the customer to repeat it
+    #    instead of inventing an id (see _resolve_order_id).
+    order_id, order_status = _resolve_order_id(text)
+    if order_status == "found":
         return {
             "intent": "order_status",
             "reply": describe_order(order_id, db_path),
             "source": "orders_db",
+        }
+    if order_status == "uncertain":
+        return {
+            "intent": "order_status_unclear",
+            "reply": ORDER_ID_REPEAT_REPLY,
+            "source": "none",
         }
 
     # 2) OPTIONAL Gemini branch - understand free-form / multilingual phrasing.
@@ -359,17 +728,22 @@ def respond(text, db_path=None, faq_path=None):
     #    are never quoted (see _respond_via_gemini). On ANY failure this returns
     #    None and we fall through to the deterministic assistant below, without
     #    ever pretending Gemini answered.
+    #    An order id was already handled above by rule 1, and the whole-word and
+    #    short-message guards in _looks_like_farewell keep false positives (a bare
+    #    "thank you", a long sentence merely mentioning "goodbye") out.
+    model_hint = None
     if gemini_module.is_enabled():
         # Farewell is resolved DETERMINISTICALLY before we consult the model,
         # so a goodbye behaves IDENTICALLY whether Gemini is enabled or disabled
         # (rule 5b below). Gemini has no `farewell` intent: left to the model,
         # "bye" is classified `other` and answered with the generic fallback.
-        # An order id was already handled above by rule 1, and the whole-word +
-        # short-message guards in _looks_like_farewell keep false positives
-        # (a bare "thank you", a long sentence merely mentioning "goodbye") out.
         if _looks_like_farewell(text):
             return {"intent": "farewell", "reply": FAREWELL_REPLY, "source": "fixed"}
-        gemini_result = _respond_via_gemini(text)
+        # Same treatment for a thank-you (rule 5c below): resolved from our own
+        # vocabulary, never from the model, and it costs no Gemini call.
+        if _looks_like_gratitude(text):
+            return _respond_gratitude(text)
+        gemini_result, model_hint = _respond_via_gemini(text, db_path)
         if gemini_result is not None:
             return gemini_result
 
@@ -419,5 +793,32 @@ def respond(text, db_path=None, faq_path=None):
     if _looks_like_farewell(text):
         return {"intent": "farewell", "reply": FAREWELL_REPLY, "source": "fixed"}
 
-    # 6) Honest fallback.
+    # 5c) Gratitude (whole-word; short-message guard as above). Reached only when
+    #      rules 1-4 found no order reference, no order id and no policy topic,
+    #      so "thanks, what is my order status?" was already answered as an order
+    #      question and only a STANDALONE thank-you gets here. Kept distinct from
+    #      farewell: thanking us does not end the call.
+    if _looks_like_gratitude(text):
+        return _respond_gratitude(text)
+
+    # 6) Nothing matched. If we did consult the model and it could not pin the
+    #    message down either, use THAT honestly: a request it found too vague
+    #    gets a short clarifying question, an unrelated one gets the same
+    #    fallback a disabled model would give. Neither invents an intent.
+    if model_hint:
+        hint_language = model_hint.get("language")
+        if model_hint.get("intent") == "ambiguous":
+            return {
+                "intent": "ambiguous",
+                "reply": _localized(CLARIFICATION_REPLY, hint_language),
+                "source": "gemini:fixed",
+            }
+        if model_hint.get("intent") == "other":
+            return {
+                "intent": "fallback",
+                "reply": _localized(FALLBACK_REPLY, hint_language),
+                "source": "gemini:fixed",
+            }
+
+    # 7) Honest fallback (no model consulted, or it gave no usable verdict).
     return {"intent": "fallback", "reply": FALLBACK_REPLY, "source": "none"}

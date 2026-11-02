@@ -421,6 +421,177 @@ button:disabled {
   color: #b91c1c;
 }
 
+/* ── Simulated call (voice-only: orb + status, no transcript) ── */
+.callbar {
+  display: flex;
+  align-items: center;
+  gap: 16px;
+  background: var(--white);
+  border: 1px solid var(--line);
+  border-radius: var(--radius);
+  box-shadow: var(--shadow);
+  padding: 14px 16px;
+}
+
+.call-orb {
+  position: relative;
+  flex: 0 0 auto;
+  width: 76px;
+  height: 76px;
+  border-radius: 50%;
+  display: grid;
+  place-items: center;
+  background: radial-gradient(circle at 50% 40%, var(--blue-100), var(--blue-050));
+  border: 1px solid var(--line);
+}
+
+.orb-core {
+  width: 22px;
+  height: 22px;
+  border-radius: 50%;
+  background: var(--blue-500);
+  transition: background 0.2s, transform 0.2s;
+}
+
+.orb-ring {
+  position: absolute;
+  inset: 0;
+  border-radius: 50%;
+  border: 2px solid transparent;
+  opacity: 0;
+}
+
+/* State-driven animation */
+.call-orb[data-state="Idle"],
+.call-orb[data-state="Ended"] { opacity: 0.65; }
+.call-orb[data-state="Idle"] .orb-core,
+.call-orb[data-state="Ended"] .orb-core { background: var(--muted); }
+
+.call-orb[data-state="Starting"] .orb-core,
+.call-orb[data-state="Listening"] .orb-core { animation: orbPulse 1.4s infinite ease-in-out; }
+.call-orb[data-state="Listening"] .orb-ring { opacity: 1; animation: orbRipple 1.8s infinite ease-out; }
+
+.call-orb[data-state="Processing"] .orb-ring { opacity: 1; border-top-color: var(--blue-600); animation: orbSpin 0.9s linear infinite; }
+
+.call-orb[data-state="Speaking"] .orb-core { animation: orbWave 0.9s infinite ease-in-out; }
+.call-orb[data-state="Speaking"] .orb-ring { opacity: 1; animation: orbRipple 1.2s infinite ease-out; }
+
+.call-orb[data-state="Muted"] .orb-core { background: var(--muted); transform: scale(0.8); }
+
+.call-orb[data-state="Error"] { border-color: #fecaca; }
+.call-orb[data-state="Error"] .orb-core { background: #dc2626; }
+
+@keyframes orbPulse {
+  0%, 100% { transform: scale(1); opacity: 1; }
+  50% { transform: scale(1.25); opacity: 0.75; }
+}
+@keyframes orbWave {
+  0%, 100% { transform: scaleY(1); }
+  25% { transform: scaleY(1.6); }
+  50% { transform: scaleY(0.7); }
+  75% { transform: scaleY(1.4); }
+}
+@keyframes orbSpin { to { transform: rotate(360deg); } }
+@keyframes orbRipple {
+  0% { transform: scale(0.85); opacity: 0.7; }
+  100% { transform: scale(1.15); opacity: 0; }
+}
+
+.call-meta {
+  flex: 1 1 auto;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.callbar-title {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  flex-wrap: wrap;
+}
+
+.callbar-label {
+  font-size: 0.85rem;
+  font-weight: 600;
+  color: var(--ink);
+}
+
+.call-state {
+  font-size: 0.78rem;
+  color: var(--blue-700);
+  background: var(--blue-050);
+  border: 1px solid var(--line);
+  border-radius: 999px;
+  padding: 2px 10px;
+}
+
+.call-duration {
+  font-variant-numeric: tabular-nums;
+  font-size: 0.85rem;
+  color: var(--muted);
+}
+
+.call-status {
+  min-height: 1.1em;
+  margin: 0;
+  font-size: 0.85rem;
+  color: var(--muted);
+}
+.call-status.error {
+  color: #b91c1c;
+}
+
+.callbar-actions {
+  display: flex;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+
+.call-btn {
+  border: none;
+  cursor: pointer;
+  border-radius: 999px;
+  padding: 8px 14px;
+  font-size: 0.85rem;
+  font-weight: 600;
+  color: var(--white);
+  transition: transform 0.05s, background 0.15s, opacity 0.15s;
+}
+
+.call-btn:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+
+.call-start {
+  background: var(--blue-600);
+}
+.call-start:hover:not(:disabled) {
+  background: var(--blue-700);
+}
+
+.call-end {
+  background: #dc2626;
+}
+.call-end:hover:not(:disabled) {
+  background: #b91c1c;
+}
+
+.call-mute {
+  background: var(--muted);
+}
+.call-mute:hover:not(:disabled) {
+  background: #475569;
+}
+
+/* Respect reduced-motion preferences. */
+@media (prefers-reduced-motion: reduce) {
+  .call-orb .orb-core,
+  .call-orb .orb-ring { animation: none !important; }
+}
+
 /* ── Footer ─ */
 .foot {
   text-align: center;

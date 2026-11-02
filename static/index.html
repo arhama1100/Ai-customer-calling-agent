@@ -30,6 +30,27 @@
         </div>
       </header>
 
+      <!-- Simulated call controls (browser voice only - no real telephony) -->
+      <section class="callbar" aria-label="Simulated call controls">
+        <div class="call-orb" id="call-orb" data-state="Idle" aria-hidden="true">
+          <span class="orb-ring"></span>
+          <span class="orb-core"></span>
+        </div>
+        <div class="call-meta">
+          <div class="callbar-title">
+            <span class="callbar-label">Simulated call</span>
+            <span id="call-state" class="call-state">Idle</span>
+            <span id="call-duration" class="call-duration" aria-label="Call duration">00:00</span>
+          </div>
+          <p id="call-status" class="call-status" role="status" aria-live="polite"></p>
+          <div class="callbar-actions">
+            <button id="call-start" type="button" class="call-btn call-start">📞 Start Call</button>
+            <button id="call-end" type="button" class="call-btn call-end" disabled>🛑 End Call</button>
+            <button id="call-mute" type="button" class="call-btn call-mute" disabled>🔇 Mute</button>
+          </div>
+        </div>
+      </section>
+
       <!-- Chat card -->
       <main class="chat-card">
         <!-- Conversation log (bubbles are injected here by app.js) -->
@@ -110,5 +131,6 @@
     <script src="/static/js/tts.js"></script>
     <script src="/static/js/stt.js"></script>
     <script src="/static/js/app.js"></script>
+    <script src="/static/js/call.js"></script>
   </body>
 </html>
