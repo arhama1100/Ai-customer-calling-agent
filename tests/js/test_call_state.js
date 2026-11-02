@@ -389,7 +389,7 @@ async function testEchoFragmentOfAiLineSuppressed() {
   const c = makeCtx();
   c.controller.startCall();          // greeting -> lastSpoken = greeting
   c.controller.onTtsEnded();
-  c.controller.handleSpeech("Shop Support Assistant", true); // substring of greeting
+  c.controller.handleSpeech("Nova AI", true); // substring of greeting
   c.runDueTimers();
   assert.strictEqual(c.pending.length, 0, "a re-heard fragment of the AI's line is dropped");
 }

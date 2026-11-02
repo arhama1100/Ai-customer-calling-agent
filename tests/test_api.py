@@ -34,7 +34,7 @@ def test_root_serves_frontend_page(client):
     assert response.status_code == 200
     page = response.get_data(as_text=True)
     # The page must reference the chat elements and scripts wired in app.js.
-    assert "Shop Support Assistant" in page
+    assert "Nova AI" in page
     assert 'id="chat-form"' in page
     assert "/static/js/app.js" in page
     # Phase 5: voice input assets must be present (mic + language selector).

@@ -57,7 +57,7 @@ const STT = (function () {
       finalTranscript = ""; // fresh session -> no stale carry-over
       renderMicState();
       ChatApp.setStatus(
-        `Listening — speak now (${LANGS[currentLang]}, ${rec.lang})…`
+        `Listening. Speak now (${LANGS[currentLang]}, ${rec.lang})…`
       );
     };
 
@@ -84,7 +84,7 @@ const STT = (function () {
           // Put the unchanged transcript in the input; the user presses Send,
           // which routes it through ChatApp.sendMessage() to /api/chat.
           ChatApp.setDraft(finalText);
-          ChatApp.setStatus("Here's what I heard — edit if needed, then press Send.");
+          ChatApp.setStatus("Here's what I heard. Edit if needed, then press Send.");
         } else {
           ChatApp.setStatus("I didn't catch that. Tap the mic and try again.");
         }
@@ -104,14 +104,14 @@ const STT = (function () {
         case "not-allowed":
         case "service-not-allowed":
           hint =
-            "Microphone permission was denied — allow it in the browser, or keep typing.";
+            "Microphone permission was denied. Allow it in the browser, or keep typing.";
           break;
         case "no-speech":
           hint = "I didn't hear anything. Tap the mic and try again.";
           isError = false; // gentle prompt, not a real error
           break;
         case "audio-capture":
-          hint = "No microphone was found — connect one, or keep typing.";
+          hint = "No microphone was found. Connect one, or keep typing.";
           break;
         case "network":
           hint =
@@ -119,13 +119,13 @@ const STT = (function () {
           break;
         case "language-not-supported":
           hint =
-            "This browser can't recognize the selected language — try the other one, or type.";
+            "This browser can't recognize the selected language. Try the other one, or type.";
           break;
         case "aborted":
           hint = ""; // user cancelled; no message needed
           break;
         default:
-          hint = `Speech recognition error (${event.error}) — typing still works.`;
+          hint = `Speech recognition error (${event.error}). Typing still works.`;
       }
       if (hint) ChatApp.setStatus(hint, isError);
     };
@@ -178,7 +178,7 @@ const STT = (function () {
       recognition.start();
     } catch (err) {
       // start() throws if called while already running, etc. — recover.
-      ChatApp.setStatus("Could not start the microphone — typing still works.");
+      ChatApp.setStatus("Could not start the microphone. Typing still works.");
       listening = false;
       renderMicState();
     }
@@ -211,7 +211,7 @@ const STT = (function () {
 
     if (!supported) {
       ChatApp.setStatus(
-        "Voice input isn't available in this browser — please type your question."
+        "Voice input isn't available in this browser. Please type your question."
       );
       if (ui.langSelect) ui.langSelect.disabled = true;
       return false;

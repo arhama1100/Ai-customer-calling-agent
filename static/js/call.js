@@ -69,7 +69,7 @@
   };
 
   var DEFAULT_GREETING =
-    "Hello! This is the Shop Support Assistant. How can I help you today?";
+    "Hello! This is Nova AI. How can I help you today?";
 
   function normStr(s) {
     return String(s || "").toLowerCase().replace(/\s+/g, " ").trim();
@@ -263,7 +263,7 @@
       try {
         tts.speak(text, getLang());
       } catch (e) {
-        status("Audio playback failed — continuing in listening mode.", true);
+        status("Audio playback failed. Continuing in listening mode.", true);
         resumeListening();
       }
     }
@@ -283,7 +283,7 @@
       clearSpeechBuffer();
       durationStart = now();
 
-      transcript.addSystem("— Call started —");
+      transcript.addSystem("Call started");
       status("Starting call…", false);
       setState(STATES.STARTING);
 
@@ -318,7 +318,7 @@
       lastSpoken = "";
       clearSpeechBuffer();
 
-      transcript.addSystem("— Call ended —");
+      transcript.addSystem("Call ended");
       status("Call ended.", false);
       setState(STATES.ENDED);
       return true;
@@ -335,13 +335,13 @@
       if (!muted) {
         muted = true;
         setState(STATES.MUTED);
-        status("Muted — microphone off.", false);
+        status("Muted. Microphone off.", false);
         clearSpeechBuffer(); // drop any half-spoken number the moment we mute
         try { recognition.stop(); } catch (e) { /* ignore */ }
       } else {
         muted = false;
         if (state === STATES.MUTED) {
-          status("Unmuted — listening.", false);
+          status("Unmuted. Listening.", false);
           resumeListening();
         }
       }
@@ -450,7 +450,7 @@
           return; // stale — a newer request owns the turn
         }
         onEvent("chat-error");
-        status("Connection problem — please try again.", true);
+        status("Connection problem. Please try again.", true);
         resumeListening();
       });
     }
@@ -662,12 +662,12 @@
       speak: function (text, lang) {
         if (ttsSupported) {
           if (!hasVoiceFor(lang)) {
-            status("No installed voice for that language — trying the default voice.", false);
+            status("No installed voice for that language. Trying the default voice.", false);
           }
           TTSMod.speak(text, lang); // real speech; auto-cancels any prior utterance
         } else {
           // No speech engine at all: be honest, then advance so the call runs.
-          status("This browser can't speak replies — the call continues without audio.", false);
+          status("This browser can't speak replies. The call continues without audio.", false);
           setTimeout(function () { controller.onTtsEnded(); }, 0);
         }
       },
@@ -740,7 +740,7 @@
           // is either working or visibly not, never quietly pretended.
           recStartPending = false;
           recStartAttempts = 0; // free again: a later start gets a fresh budget
-          status("The microphone is still busy - still trying…", false);
+          status("The microphone is still busy. Still trying…", false);
         }
       }
     }
@@ -825,7 +825,7 @@
             noSpeechStreak += 1;
             if (noSpeechStreak >= 3) {
               noSpeechStreak = 0;
-              status("I have not heard anything yet - check the microphone, and that the Voice language ("
+              status("I have not heard anything yet. Check the microphone, and that the Voice language ("
                 + preferredLang() + ") matches how you speak.", false);
             }
           }
@@ -839,12 +839,12 @@
           // fallback is to TYPE Urdu or Roman Urdu, which the backend reads.
           status("This browser cannot recognize the selected voice language ("
             + r.lang + "). Pick another Voice language, or type English, Urdu or "
-            + "Roman Urdu in the text box below - I understand all three.", true);
+            + "Roman Urdu in the text box below. I understand all three.", true);
         } else if (ev.error === "network") {
-          status("Speech recognition could not reach the browser's speech service - check your connection. Text chat still works.", true);
+          status("Speech recognition could not reach the browser's speech service. Check your connection. Text chat still works.", true);
         } else {
           controller.onError(
-            "Speech recognition error (" + ev.error + ") — voice calling paused. Text chat still works."
+            "Speech recognition error (" + ev.error + "). Voice calling paused. Text chat still works."
           );
         }
       };
@@ -908,7 +908,7 @@
       Listening: "Listening…",
       Processing: "Thinking…",
       Speaking: "AI is speaking…",
-      Muted: "Muted — microphone off.",
+      Muted: "Muted. Microphone off.",
       Ending: "Ending call…",
       Ended: "Call ended.",
       Error: "Voice call error.",
