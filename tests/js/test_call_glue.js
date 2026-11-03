@@ -558,6 +558,34 @@ async function testRecognizedTextIsSeparateOptIn() {
   } finally { b2.cleanup(); }
 }
 
+// ── 15) Task 2 (B4): a human-agent handoff reply from /api/chat must reach the
+//        shared TTS speak function exactly like any other answer. The ask is
+//        recognized by the BACKEND (covered in pytest); this proves the voice
+//        glue neither drops nor rewrites the honest handoff text. ──
+async function testHumanAgentHandoffReplyIsSpoken() {
+  const handoff = "I'm Nova AI, an automated assistant - I can't transfer you " +
+    "to a live human agent in this demo, and no person has been contacted.";
+  const b = mountFake({
+    tts: true,
+    chatReply: { intent: "human_agent_request", reply: handoff, source: "fixed" },
+  });
+  try {
+    toListening(b);
+    b.emitResult("I want to speak to a human", true);
+    // No terminal punctuation: like tests 10/14, the turn closes when the
+    // bounded merge window expires, not on the next tick.
+    b.advance(3000);
+    await flush(); // the reply arrives on a promise
+    assert.strictEqual(b.sent.length, 1, "the spoken ask is sent to /api/chat once");
+    assert.strictEqual(b.sent[0].url, "/api/chat", "through the existing endpoint");
+    assert.strictEqual(JSON.parse(b.sent[0].body).message, "I want to speak to a human",
+      "with the unchanged {message} request body");
+    assert.ok(b.spoken.indexOf(handoff) !== -1,
+      "the handoff reply is handed to the shared TTS module VERBATIM (not rewritten)");
+    assert.strictEqual(b.stateText(), "Speaking", "and the call reports it is speaking");
+  } finally { b.cleanup(); }
+}
+
 const tests = [
   ["1) listening arms one session", testListeningArmsOneSession],
   ["2) silently dead session is re-armed", testSilentlyDeadSessionIsReArmed],
@@ -573,6 +601,7 @@ const tests = [
   ["12) end call stops everything", testEndCallStopsEverything],
   ["13) changing voice language re-arms recognition", testChangeVoiceLanguageReArmsRecognition],
   ["14) recognized-text diagnostics are a separate opt-in", testRecognizedTextIsSeparateOptIn],
+  ["15) human-agent handoff reply is spoken verbatim", testHumanAgentHandoffReplyIsSpoken],
 ];
 
 (async function run() {

@@ -430,3 +430,17 @@ def test_chat_internal_error_returns_safe_json(client, monkeypatch):
     text = r.get_data(as_text=True)
     assert "SECRET-INTERNAL-DETAIL" not in text
     assert "Traceback" not in text
+
+
+# ── Task 2: human_agent_request over the real endpoint ──
+def test_chat_human_agent_request_contract(client):
+    # /api/chat stays backward compatible: same {intent, reply, source} shape,
+    # the new intent is exposed through it, and the reply is the honest fixed
+    # handoff (deterministic - no model involvement).
+    r = client.post("/api/chat", json={"message": "I want to speak to a human"})
+    assert r.status_code == 200
+    data = r.get_json()
+    _assert_chat_contract(data)
+    assert data["intent"] == "human_agent_request"
+    assert data["source"] == "fixed"
+    assert "automated assistant" in data["reply"].lower()

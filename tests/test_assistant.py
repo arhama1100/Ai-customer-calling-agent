@@ -1484,13 +1484,14 @@ def test_change_request_beats_the_order_status_reading(db_path):
 
 
 @pytest.mark.parametrize("msg", [
-    "when do you open",
     "I will come back later",
     "what is your favourite food",
 ])
 def test_broadened_cues_do_not_invent_an_order_question(msg, db_path):
     # Guard for the widened vocabulary: an everyday sentence that merely contains
     # a word like "when", "back" or "get" must NOT be read as an order question.
+    # ("when do you open" moved out of this list in the business_hours phase:
+    # it is now a recognized business_hours question, tested below.)
     result = respond(msg, db_path=db_path)
     assert result["intent"] == "fallback", msg
     assert result["reply"] == assistant.FALLBACK_REPLY, msg
@@ -1708,3 +1709,279 @@ def test_half_a_question_is_answered_honestly(fragment, db_path):
     assert result["reply"] == assistant.FALLBACK_REPLY, fragment
 
 
+# ════════════════════════════════════════════════════════════════════
+# business_hours intent (assignment requirement 4). Deterministic routing over
+# English / Roman Urdu / Urdu script; the schedule is the SAMPLE text from
+# data/faq.json returned VERBATIM (source faq_kb:business_hours:sample), and
+# the check runs BEFORE the optional model, so Gemini is never consulted for
+# hours and can never invent a schedule.
+# ════════════════════════════════════════════════════════════════════
+_BUSINESS_HOURS_QUESTIONS = [
+    # English
+    "What are your business hours?",
+    "When do you open?",
+    "When do you close?",
+    "Are you open today?",
+    "What time does your shop open?",
+    # Roman Urdu
+    "Apki shop kab khulti hai?",
+    "Apki shop kab band hoti hai?",
+    "Opening timing kya hai?",
+    "Aap kitne baje open hotay hain?",
+    # Urdu script
+    "آپ کی دکان کب کھلتی ہے؟",
+    "آپ کی دکان کب بند ہوتی ہے؟",
+]
+
+
+@pytest.mark.parametrize("msg", _BUSINESS_HOURS_QUESTIONS)
+def test_business_hours_intent_and_grounded_reply(msg, db_path):
+    result = respond(msg, db_path=db_path)
+    assert result["intent"] == "business_hours", msg
+    assert result["source"] == "faq_kb:business_hours:sample", msg
+    # The wording comes verbatim from faq.json - never invented, never rephrased.
+    sample = assistant.faq_module.get_answer_by_id("business_hours")
+    assert result["reply"] == sample, msg
+
+
+def test_business_hours_topic_is_labelled_as_sample():
+    # Honesty guard: the demo schedule must present itself as fictional sample
+    # data, consistent with the _meta disclaimer (no claim of real policy).
+    topics = assistant.faq_module.load_topics()
+    bh = next(t for t in topics if t["id"] == "business_hours")
+    assert bh["title"] and bh["keywords"]
+    assert "fictional sample" in bh["answer"].lower()
+
+
+@pytest.mark.parametrize("msg", [
+    "when does the shop open on sundays",
+    "are you closed tomorrow",
+    "what are the opening hours",
+    "shop timing kya hai?",
+    "aap ke kitne baje tak open?",
+])
+def test_business_hours_more_variants(msg, db_path):
+    result = respond(msg, db_path=db_path)
+    assert result["intent"] == "business_hours", msg
+    assert result["source"] == "faq_kb:business_hours:sample", msg
+
+
+@pytest.mark.parametrize("msg,expected_intent", [
+    ("Mera order kab deliver hoga?", "order_status_missing_id"),  # order path
+    ("Refund kab milega?", "faq"),                                # returns policy
+    ("order band kar do", "faq"),                                # cancellation
+    ("do you have a physical store in Lahore", "fallback"),       # no time cue
+])
+def test_business_hours_does_not_hijack_other_intents(msg, expected_intent, db_path):
+    # Regression guards for the shared wording ("kab", "band", "store", "closed"):
+    # the existing order / policy / fallback paths must keep their answers.
+    result = respond(msg, db_path=db_path)
+    assert result["intent"] == expected_intent, msg
+    assert result["intent"] != "business_hours", msg
+
+
+def test_business_hours_never_reaches_the_model(db_path, monkeypatch):
+    # With Gemini "enabled", the deterministic hours rule still answers first
+    # and the classifier is NEVER consulted - so the model can neither invent
+    # nor block the schedule (identical behavior to Gemini disabled above).
+    calls = []
+
+    def fake_classify(text):
+        calls.append(text)
+        return None
+
+    monkeypatch.setattr(assistant.gemini_module, "is_enabled", lambda: True)
+    monkeypatch.setattr(assistant.gemini_module, "classify_message", fake_classify)
+    result = respond("when do you open", db_path=db_path)
+    assert result["intent"] == "business_hours"
+    assert calls == [], "the model must not be asked about business hours"
+
+
+def test_business_hours_defers_to_an_explicit_order_id(db_path):
+    # Rule 1 (order id + SQLite) keeps absolute precedence: a mixed message is
+    # answered as an order status, not as timings.
+    result = respond("ORD-1002, are you open today too?", db_path=db_path)
+    assert result["intent"] == "order_status"
+    assert result["source"] == "orders_db"
+
+
+# ════════════════════════════════════════════════════════════════════
+# human_agent_request intent (Task 2). Deterministic routing over English /
+# Roman Urdu / Urdu script, resolved FIRST - before order ids and before the
+# optional model, so an explicit human ask is never silently dropped and
+# Gemini is never consulted for it. The reply is fixed honest wording: it
+# admits Nova is automated, states plainly that no live transfer exists in
+# this demo, and never invents a contact channel or claims anyone was
+# contacted.
+# ════════════════════════════════════════════════════════════════════
+_HUMAN_REQUESTS_ENGLISH = [
+    "I want to speak to a human.",
+    "Can I talk to a real person?",
+    "Please connect me to an agent.",
+    "I need a customer service representative.",
+    "Transfer me to support.",
+    "Let me talk to someone from your team.",
+]
+_HUMAN_REQUESTS_ROMAN_URDU = [
+    "Mujhe kisi human agent se baat karni hai.",
+    "Mujhe representative se baat karwao.",
+    "Customer support se connect kar do.",
+    "Kisi real person se baat karni hai.",
+    "Agent se baat karni hai.",
+]
+_HUMAN_REQUESTS_URDU_SCRIPT = [
+    "مجھے کسی انسان سے بات کرنی ہے۔",
+    "مجھے نمائندے سے بات کروائیں۔",
+    "مجھے کسٹمر سپورٹ سے رابطہ کروائیں۔",
+]
+
+
+@pytest.mark.parametrize(
+    "msg", _HUMAN_REQUESTS_ENGLISH + _HUMAN_REQUESTS_ROMAN_URDU + _HUMAN_REQUESTS_URDU_SCRIPT)
+def test_human_agent_request_intent_and_fixed_handoff(msg, db_path):
+    result = respond(msg, db_path=db_path)
+    assert result["intent"] == "human_agent_request", msg
+    assert result["source"] == "fixed", msg
+    assert result["reply"] == assistant.HUMAN_AGENT_HANDOFF_REPLY, msg
+
+
+def test_human_agent_handoff_is_honest_about_being_automated():
+    # The reply must name Nova as an automated assistant and state plainly
+    # that no live transfer exists - it may never imply a human was reached.
+    reply = assistant.HUMAN_AGENT_HANDOFF_REPLY.lower()
+    assert "automated assistant" in reply
+    assert "can't transfer you" in reply
+    assert "no person has been contacted or notified" in reply
+
+
+def test_human_agent_handoff_invents_no_contact_channel():
+    # Honesty guard: no email address, phone number, or link may appear, and
+    # the reply must not promise a callback or any business action.
+    import re
+
+    reply = assistant.HUMAN_AGENT_HANDOFF_REPLY
+    assert not re.search(r"[\w.+-]+@[\w-]+\.[\w.-]+", reply), reply
+    assert not re.search(r"\+\d|\b\d{3}[- ]\d{3,4}\b", reply), reply
+    lowered = reply.lower()
+    for forbidden in ("call you back", "we will contact you", "an agent will",
+                      "connecting you now", "has been transferred"):
+        assert forbidden not in lowered, forbidden
+    # The only contact mention is CONDITIONAL on the customer already having
+    # an official channel - it never claims one exists.
+    assert "if the business gave you an official support contact" in lowered
+
+
+def test_human_agent_request_never_reaches_the_model(db_path, monkeypatch):
+    # The deterministic rule answers before the optional Gemini branch, so
+    # the classifier is NEVER consulted (explicit human ask wins over any
+    # model classification, exactly like business_hours above).
+    calls = []
+
+    def fake_classify(text):
+        calls.append(text)
+        return {"intent": "other", "language": "en"}
+
+    monkeypatch.setattr(assistant.gemini_module, "is_enabled", lambda: True)
+    monkeypatch.setattr(assistant.gemini_module, "classify_message", fake_classify)
+    result = respond("I want to speak to a human", db_path=db_path)
+    assert result["intent"] == "human_agent_request"
+    assert calls == [], "the model must not be asked about a human request"
+
+
+@pytest.mark.parametrize("msg,expected_intent", [
+    # Ordinary mentions of agent/support/human/person with NO communication
+    # request must keep their own paths (never a false handoff).
+    ("who is my delivery agent?", "faq"),                     # shipping cue wins
+    ("does your support team have social media?", "fallback"),
+    ("I want support for this issue", "fallback"),            # want + WEAK noun
+    ("what are customer support timings?", "business_hours"), # hours question
+    ("do you hire field agents?", "fallback"),
+    # B1 regression: a CAPABILITY question about the team uses a WEAK noun and
+    # a talk verb but never asks to BE connected - the requester guard keeps
+    # it off the handoff path.
+    ("What languages does your support team speak?", "fallback"),
+    ("does your agent talk to customers directly?", "fallback"),
+    ("who is my delivery agent's supervisor?", "faq"),        # possessive too
+])
+def test_human_agent_request_does_not_hijack_unrelated_questions(msg, expected_intent, db_path):
+    result = respond(msg, db_path=db_path)
+    assert result["intent"] == expected_intent, msg
+    assert result["intent"] != "human_agent_request", msg
+
+
+@pytest.mark.parametrize("msg,expected_intent", [
+    # Existing routing is untouched for messages with no human reference:
+    ("Mera order kab deliver hoga?", "order_status_missing_id"),
+    ("I want to talk about my order ORD-1001", "order_status"),
+    ("can someone check my order ORD-1001", "order_status"),
+    ("I want my money back", "faq"),
+    ("Refund kab milega?", "faq"),
+    ("order band kar do", "faq"),
+    ("When do you open?", "business_hours"),
+])
+def test_existing_routing_unchanged_by_human_agent_rule(msg, expected_intent, db_path):
+    result = respond(msg, db_path=db_path)
+    assert result["intent"] == expected_intent, msg
+
+
+def test_mixed_human_request_wins_deliberately(db_path):
+    # CHOSEN routing for a combined ask: the human request is answered first
+    # (never silently dropped behind an order lookup); the handoff reply then
+    # explicitly invites the customer to share the order number with Nova.
+    result = respond("I want to speak to a human about order ORD-1001", db_path=db_path)
+    assert result["intent"] == "human_agent_request"
+    assert "share your order number" in result["reply"].lower()
+
+
+def test_unsupported_question_keeps_fallback_with_human_option(db_path):
+    # Phase 3: the fallback stays an honest fallback (NOT reclassified as a
+    # human request) but now also offers the human option, which routes to
+    # the honest handoff when the customer takes it up.
+    result = respond("how do I reset my wifi password?", db_path=db_path)
+    assert result["intent"] == "fallback"
+    assert result["reply"] == assistant.FALLBACK_REPLY
+    assert "speak with a human" in result["reply"].lower()
+    follow_up = respond("i would rather speak with a human", db_path=db_path)
+    assert follow_up["intent"] == "human_agent_request"
+
+
+def test_routine_faq_question_is_not_a_handoff(db_path):
+    # The three-way distinction the task requires: explicit human ask vs
+    # routine FAQ vs unsupported question.
+    assert respond("What is your return policy?", db_path=db_path)["intent"] == "faq"
+    assert respond("Transfer me to support.", db_path=db_path)["intent"] == "human_agent_request"
+    assert respond("What is the weather on Mars?", db_path=db_path)["intent"] == "fallback"
+
+
+def test_human_agent_request_response_keeps_the_contract_shape(db_path):
+    # /api/chat contract compatibility: the reply keeps EXACTLY the existing
+    # {intent, reply, source} shape - no new fields, same key set as always.
+    result = respond("I need a customer service representative.", db_path=db_path)
+    assert set(result.keys()) == {"intent", "reply", "source"}
+    baseline = respond("hello", db_path=db_path)
+    assert set(baseline.keys()) == set(result.keys())
+
+
+# B2 regression: hyphenated compounds and trailing possessives are expanded
+# for the human-agent matcher only, so a hyphen or 's cannot hide a genuine
+# request - and cannot smuggle an unrelated question into one either.
+@pytest.mark.parametrize("msg", [
+    "Connect me to a human-agent.",
+    "Transfer to an agent's desk.",
+])
+def test_human_agent_request_survives_hyphen_and_possessive(msg, db_path):
+    result = respond(msg, db_path=db_path)
+    assert result["intent"] == "human_agent_request", msg
+    assert result["source"] == "fixed", msg
+
+
+@pytest.mark.parametrize("msg,expected_intent", [
+    # "human-rights"/"agent's" split for the human test too, but with no
+    # communicate/transfer wording the ordinary path still answers.
+    ("is this a human-rights issue?", "fallback"),
+    ("do you offer after-sales support?", "fallback"),
+])
+def test_hyphen_expansion_creates_no_new_handoff(msg, expected_intent, db_path):
+    result = respond(msg, db_path=db_path)
+    assert result["intent"] == expected_intent, msg
+    assert result["intent"] != "human_agent_request", msg

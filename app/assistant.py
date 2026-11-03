@@ -5,7 +5,16 @@ Routes a customer message to the right APPROVED data source. This is the
 brain of the text/voice chat, and it is intentionally deterministic.
 
 Routing rules (checked in order):
+1a. Explicit request to speak with a HUMAN (English / Roman Urdu / Urdu script)
+    -> honest handoff message, resolved BEFORE every other rule including the
+    optional model. A mixed request ("...about order ORD-1001") still goes to
+    the handoff so the human ask is never silently dropped; the handoff reply
+    itself invites the customer to ask Nova the concrete question directly.
 1. Contains an order id (e.g. ORD-1002)  -> answer from SQLite (orders.py)
+1b. Business-hours question (English / Roman Urdu / Urdu script) -> the SAMPLE
+    schedule from data/faq.json, resolved BEFORE the optional model so the
+    answer is identical with Gemini on or off, and the model is never asked
+    and can never invent opening times.
 2. OPTIONAL Gemini branch (only when GEMINI_ENABLED + a key are set): a plain
    farewell is first answered deterministically (so "bye" behaves the SAME on
    and off - Gemini has no `farewell` intent), then we classify the message's
@@ -178,6 +187,118 @@ POLICY_GENERIC_TOKENS = {"policy", "policies", "rules", "نियم", "قواع�
 # specific unmapped subject). Extensible if the shop later adds such a policy.
 UNSUPPORTED_POLICY_TOPICS = {"warranty", "guarantee"}
 
+# ── Business-hours vocabulary ─────────────────────────────────────────────
+# Three tiers so the routing stays safe:
+# STRONG words only ever appear in an hours question (Urdu "kab band" style
+# asks are carried by WEAK+CONTEXT, not listed here).
+BUSINESS_HOURS_STRONG_TOKENS = {
+    # English
+    "hours", "timing", "timings", "opening", "closing",
+    # Roman Urdu
+    "khulti", "khulta", "kholtay", "kholta", "kholen", "kholne", "khulne",
+    "baje",  # "kitne" deliberately NOT here: "kitne din" asks a shipping
+             # duration; only "kitne baje" (o'clock) names time, and "baje"
+             # carries that on its own.
+    # Urdu script
+    "کھلتی", "کھولتی", "کھولتا", "بجے", "ٹائمنگ", "اوقات",
+}
+# WEAK words that also live in other intents ("closed order", "band kar do"
+# = cancel). They count ONLY together with a CONTEXT question/time word.
+BUSINESS_HOURS_WEAK_TOKENS = {
+    "open", "opens", "opened", "close", "closes", "closed",
+    "band", "shop", "store", "dukaan", "dukan",
+    "بند", "دکان", "شاپ", "اسٹور",
+}
+# CONTEXT: the question/time wording that turns a weak word into an hours ask.
+BUSINESS_HOURS_CONTEXT_TOKENS = {
+    "when", "what", "time", "today", "tomorrow", "day", "days", "week",
+    "kab", "aaj", "kal", "ab", "kya", "are", "does", "is",
+    "کب", "آج", "کل", "ab", "کیا",
+}
+# SHOP: an explicit reference to the shop itself. "band" means both "closed"
+# and "stop (cancel)", so a message that carries cancellation wording counts as
+# an hours question only when the SHOP is what is being talked about
+# ("apki shop kab band hoti hai") - "order band" never reaches this, it is
+# already excluded by the order-reference guard in _is_business_hours.
+BUSINESS_HOURS_SHOP_TOKENS = {
+    "shop", "store", "dukaan", "dukan", "market",
+    "دکان", "شاپ", "اسٹور", "مرکز",
+}
+
+# ── Human-agent request vocabulary (Task 2) ─────────────────────────────
+# Two tiers, mirroring the business-hours design above: STRONG words name a
+# HUMAN directly, so they pair with any request verb (want/need/speak/talk...).
+# WEAK words (agent/support/team/staff/someone) also live in ordinary
+# questions ("who is my delivery agent?", "I want support for this"), so they
+# count ONLY next to an explicit communication verb (speak/talk/connect/
+# transfer/baat/بات) - never on want/need alone. Both tiers require a human
+# REFERENCE plus a COMMUNICATION cue, so no single everyday word handoffs.
+HUMAN_AGENT_STRONG_REF_TOKENS = {
+    # English
+    "human", "person", "representative", "representatives",
+    # Roman Urdu
+    "insaan", "insan", "numainda", "numainde", "shakhs",
+    # Urdu script
+    "انسان", "انسانی", "شخص", "نمائندہ", "نمائندے", "نمائندوں",
+}
+HUMAN_AGENT_WEAK_REF_TOKENS = {
+    # English (job-role words that also appear in unrelated questions)
+    "agent", "agents", "staff", "team", "someone", "support",
+    # Roman Urdu loanword
+    "customer",
+    # Urdu script
+    "ایجنٹ", "ٹیم", "عملہ", "کسٹمر", "سپورٹ",
+}
+HUMAN_AGENT_CONNECT_TOKENS = {
+    # English communication verbs - "contact" is deliberately NOT here (an
+    # "agent se contact" style Urdu ask is covered by the script form below,
+    # while "how do I contact the courier?" must stay a shipping question).
+    "speak", "speaks", "speaking", "talk", "talks", "talking",
+    "connect", "connects", "connecting", "transfer", "transfers",
+    "transferring",
+    # Roman Urdu
+    "baat", "karwao", "karwaao", "karwa", "karwaye",
+    # Urdu script
+    "بات", "رابطہ", "کروائیں", "کروا", "کروائے",
+}
+HUMAN_AGENT_WANT_TOKENS = {
+    # Only ever decisive with a STRONG human noun (see _is_human_agent_request)
+    "want", "wants", "need", "needs",
+}
+# B1 fix - the WEAK tier is split so a CAPABILITY question about the team
+# ("what languages does your support team speak?") is not read as a request TO
+# be connected: TRANSFER verbs (connect/transfer/karwao/رابطہ/کروائیں) are
+# decisive for WEAK nouns on their own, while a TALK verb (speak/talk/baat/
+# بات) only counts when the message also names WHO the talk is FOR (a
+# REQUESTER: "me", "mujhe", or the desire forms "karni/karna/کرنی" - Roman
+# Urdu "baat karni hai" states the request with an implied first person).
+# STRONG human nouns keep the full CONNECT set (plus WANT) exactly as before,
+# so every genuine request tested above still routes.
+HUMAN_AGENT_TRANSFER_TOKENS = {
+    # English
+    "connect", "connects", "connecting", "transfer", "transfers",
+    "transferring",
+    # Roman Urdu
+    "karwao", "karwaao", "karwa", "karwaye",
+    # Urdu script
+    "رابطہ", "کروائیں", "کروا", "کروائے",
+}
+HUMAN_AGENT_TALK_TOKENS = {
+    # English
+    "speak", "speaks", "speaking", "talk", "talks", "talking",
+    # Roman Urdu
+    "baat",
+    # Urdu script
+    "بات",
+}
+HUMAN_AGENT_REQUESTER_TOKENS = {
+    # Who the conversation is to be with / for - spoken first person or the
+    # desire construction that carries it in Roman Urdu / Urdu script.
+    "me", "myself", "us", "mujhe", "mujhko",
+    "karni", "karna", "karana", "chahta", "chahti",
+    "کرنی", "کرنے", "چاہیے",
+}
+
 # Greetings are matched as WHOLE short words/phrases (never a substring), so
 # "nahi" (which contains 'hi') is NOT a greeting.
 GREETING_TOKENS = {
@@ -244,7 +365,24 @@ GRATITUDE_REPLY_URDU = "آپ کا شکریہ! کیا میں آپ کی اور ک�
 FALLBACK_REPLY = (
     "I'm not sure how to help with that yet. I can check an order status "
     "(just tell me your order number) or answer questions about shipping, "
-    "returns, cancellations, and payments."
+    "returns, cancellations, and payments. I'm an automated assistant, so if "
+    "you'd rather speak with a human, just ask and I'll be honest about what "
+    "this demo can and cannot do."
+)
+
+# Honest handoff wording (Task 2). Hard rules: it admits Nova is automated, it
+# states plainly that NO live transfer exists in this demo and that NO person
+# has been contacted (nothing here happens silently behind the scenes), and it
+# never invents a phone number, email, or support channel - it only points at
+# an official contact IF the customer was given one by the business. It closes
+# by offering what Nova CAN actually do, so a mixed request loses nothing.
+HUMAN_AGENT_HANDOFF_REPLY = (
+    "I'm Nova AI, an automated assistant - I can't transfer you to a live "
+    "human agent, because live agent transfer is not available in this demo "
+    "and no person has been contacted or notified. If the business gave you "
+    "an official support contact, please use that channel. I can still help "
+    "right here: share your order number and I'll check its status, or ask "
+    "about shipping, returns, cancellations, payments, and business hours."
 )
 
 # ── Gemini-enabled routing (Phase B2 / G2) ────────────────────────────────
@@ -368,6 +506,71 @@ def _is_order_status_no_id(tokens):
     has_ref = bool(ORDER_REF_TOKENS & token_set)
     has_cue = bool(ORDER_STATUS_CUES & token_set)
     return has_ref and has_cue
+
+
+def _is_human_agent_request(tokens):
+    """True when the message explicitly asks to speak with a HUMAN (English,
+    Roman Urdu or Urdu script).
+
+    Two tiers keep ordinary mentions out:
+    - a STRONG human noun (human/person/representative/انسان/نمائندے) plus a
+      communicate cue OR a plain want/need is a handoff request;
+    - a WEAK role noun (agent/support/team/staff/someone) needs a TRANSFER
+      verb (connect/transfer/karwao/رابطہ), or a TALK verb (speak/talk/baat)
+      ONLY when a REQUESTER ("me", "mujhe", "karni") names who the talk is
+      for - so "I want support for this", "who is my delivery agent?" and
+      "what languages does your support team speak?" keep their own paths;
+    - with neither tier the message is not a handoff at all.
+
+    B2: for THIS test only, hyphenated compounds are split and possessive
+    apostrophes removed ("human-agent" -> human + agent; "agent's" -> agents)
+    so a hyphen or 's cannot hide a request. Every other router still sees the
+    original tokens, so no other path changes behavior.
+    """
+    expanded = []
+    for tok in tokens:
+        for part in tok.replace("\u2019", "'").split("-"):
+            part = part.replace("'", "")
+            if part:
+                expanded.append(part)
+    token_set = set(expanded)
+    has_connect = bool(HUMAN_AGENT_CONNECT_TOKENS & token_set)
+    has_want = bool(HUMAN_AGENT_WANT_TOKENS & token_set)
+    if HUMAN_AGENT_STRONG_REF_TOKENS & token_set:
+        return has_connect or has_want
+    if HUMAN_AGENT_WEAK_REF_TOKENS & token_set:
+        if HUMAN_AGENT_TRANSFER_TOKENS & token_set:
+            return True
+        return bool(HUMAN_AGENT_TALK_TOKENS & token_set
+                    and HUMAN_AGENT_REQUESTER_TOKENS & token_set)
+    return False
+
+
+def _is_business_hours(tokens):
+    """True when the message asks about opening/closing times (English, Roman
+    Urdu or Urdu script).
+
+    Guards keep every existing path intact:
+    - a message that references the customer's OWN order/parcel is never an
+      hours question here ("Mera order kab deliver hoga?" stays on the order
+      path, "why is my parcel closed" stays a status question);
+    - STRONG hours words alone are decisive;
+    - WEAK words (open/close/band/shop) need a question/time CONTEXT word, and
+      when cancellation wording ("band") is present the message must also name
+      the SHOP itself, so "refund kab milega" stays returns and cancel wording
+      stays cancellation.
+    """
+    token_set = set(tokens)
+    if ORDER_REF_TOKENS & token_set:
+        return False
+    if BUSINESS_HOURS_STRONG_TOKENS & token_set:
+        return True
+    if (BUSINESS_HOURS_WEAK_TOKENS & token_set
+            and BUSINESS_HOURS_CONTEXT_TOKENS & token_set):
+        if POLICY_ACTION_TOKENS & token_set:
+            return bool(BUSINESS_HOURS_SHOP_TOKENS & token_set)
+        return True
+    return False
 
 
 # ── Spoken order-number normalization ──────────────────────────────────────
@@ -702,6 +905,20 @@ def respond(text, db_path=None, faq_path=None):
     if not text:
         return {"intent": "empty", "reply": FALLBACK_REPLY, "source": "none"}
 
+    # 1a) Explicit human-agent request (any supported language) -> the honest
+    #     handoff wording above. First rule of all, before order ids and
+    #     before the optional model, so a mixed request ("I want to speak to
+    #     a human about order ORD-1001") can never silently drop the human
+    #     ask; the reply itself invites the concrete question straight back.
+    #     Deterministic fixed text - no model call, no invented contact info.
+    tokens = _match_tokens(text)
+    if _is_human_agent_request(tokens):
+        return {
+            "intent": "human_agent_request",
+            "reply": HUMAN_AGENT_HANDOFF_REPLY,
+            "source": "fixed",
+        }
+
     # 1) Order status — highest priority when an order id is present. This also
     #    resolves a SPOKEN order number ("one zero zero two", "order number
     #    1002") into the canonical ORD-#### form; the SQLite lookup itself is
@@ -720,6 +937,21 @@ def respond(text, db_path=None, faq_path=None):
             "reply": ORDER_ID_REPEAT_REPLY,
             "source": "none",
         }
+
+    # 1b) Business-hours question (any supported language) -> the SAMPLE schedule
+    #     from data/faq.json, VERBATIM, before the optional model is consulted:
+    #     the answer is identical with Gemini enabled or disabled, and no model
+    #     can ever invent opening times. Same precedence pattern as farewell and
+    #     gratitude above. If the topic were ever missing from faq.json, this
+    #     falls through honestly to the existing routing (never guesses).
+    if _is_business_hours(tokens):
+        sample = faq_module.get_answer_by_id("business_hours", faq_path)
+        if sample:
+            return {
+                "intent": "business_hours",
+                "reply": sample,
+                "source": "faq_kb:business_hours:sample",
+            }
 
     # 2) OPTIONAL Gemini branch - understand free-form / multilingual phrasing.
     #    Only runs when the feature is enabled and a key exists; it may only
@@ -749,7 +981,6 @@ def respond(text, db_path=None, faq_path=None):
 
     # 3) Order-status wording (English / Urdu / Roman Urdu) but NO order id ->
     #    ask for the order id. Never guess an order or invent a status.
-    tokens = _match_tokens(text)
     if _is_order_status_no_id(tokens):
         return {
             "intent": "order_status_missing_id",

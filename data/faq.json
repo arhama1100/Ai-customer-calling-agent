@@ -33,6 +33,12 @@
       "title": "Payment Methods",
       "keywords": ["payment", "pay", "card", "credit", "method"],
       "answer": "We accept all major credit cards and digital wallets. Payment is captured when the order is placed."
+    },
+    {
+      "id": "business_hours",
+      "title": "Business Hours",
+      "keywords": ["business hours", "opening hours", "when do you open", "when do you close", "are you open", "opening timing", "kab khulti", "kab band", "kitne baje", "کب کھلتی", "کب بند", "دکان کب"],
+      "answer": "We are open Monday to Saturday, 10:00 AM to 8:00 PM, and closed on Sundays. (This is a fictional sample schedule for this demonstration, not an owner-approved business policy.)"
     }
   ]
 }
