@@ -31,22 +31,39 @@ function flush() {
 }
 
 function makeElement(id) {
-  return {
+  const el = {
     id: id,
     textContent: "",
     value: "",
     disabled: false,
+    checked: false,
     className: "",
     classes: [],
     attrs: {},
     listeners: {},
-    classList: {
-      add: function (c) {},
-      remove: function (c) {},
-    },
+    children: [],
+    scrollTop: 0,
+    scrollHeight: 100,
     addEventListener: function (type, fn) { this.listeners[type] = fn; },
     setAttribute: function (k, v) { this.attrs[k] = v; },
+    appendChild: function (child) { this.children.push(child); return child; },
+    removeChild: function (child) {
+      const i = this.children.indexOf(child);
+      if (i >= 0) this.children.splice(i, 1);
+      return child;
+    },
   };
+  // A FUNCTIONAL classList (Task 4/5 code toggles "error"), still harmless for
+  // every older test that only watches textContent.
+  el.classList = {
+    add: function (c) { if (el.classes.indexOf(c) === -1) el.classes.push(c); },
+    remove: function (c) {
+      const i = el.classes.indexOf(c);
+      if (i >= 0) el.classes.splice(i, 1);
+    },
+    toggle: function (c, on) { if (on) el.classList.add(c); else el.classList.remove(c); },
+  };
+  return el;
 }
 
 /**
@@ -78,14 +95,28 @@ function mountFake(opts) {
 
   const els = {};
   ["call-start", "call-end", "call-mute", "call-duration", "call-state",
-    "call-status", "call-orb", "mic-btn", "stt-lang"].forEach(function (id) {
+    "call-status", "call-orb", "mic-btn", "stt-lang",
+    // Task 4/5 panel: transcript, consent checkbox, session status line.
+    "call-transcript", "call-consent", "call-session"].forEach(function (id) {
     els[id] = makeElement(id);
   });
   els["stt-lang"].value = opts.lang || "en-US";
+  els["call-consent"].checked = !!opts.consent; // consent OFF unless asked
 
+  const domEvents = [];
   const document = {
     readyState: "complete",
     getElementById: function (id) { return els[id] || null; },
+    createElement: function (tag) { return makeElement(tag); },
+    addEventListener: function (type, fn) {
+      (document._l[type] = document._l[type] || []).push(fn);
+    },
+    dispatchEvent: function (ev) {
+      domEvents.push(ev && ev.type);
+      (document._l[ev && ev.type] || []).forEach(function (fn) { try { fn(ev); } catch (e) {} });
+      return true;
+    },
+    _l: {},
   };
 
   // ── Fake recognition ──
@@ -144,9 +175,32 @@ function mountFake(opts) {
   function emitTts(state) { if (ttsListener) ttsListener(state); }
 
   // ── Fake fetch: records the exact body, answers with the real contract ──
+  // Routes: /api/chat as before; the Task 5 session endpoints answer like the
+  // real Flask routes (start returns a valid hex id; end confirms completion).
   const sent = [];
+  const FAKE_SESSION_ID = "0123456789abcdef0123456789abcdef";
   const fetchImpl = function (url, init) {
     sent.push({ url: url, body: init && init.body });
+    if (url === "/api/session/start") {
+      return Promise.resolve(opts.sessionStartFails
+        ? { ok: false, status: 500, json: function () { return Promise.resolve({}); } }
+        : { ok: true, json: function () {
+            return Promise.resolve({
+              session_id: FAKE_SESSION_ID, consent: true, status: "active",
+              started_at: "2026-11-03T00:00:00+00:00", notice: "demo",
+            });
+          } });
+    }
+    if (/^\/api\/session\/[0-9a-f]{32}\/end$/.test(url)) {
+      return Promise.resolve(opts.sessionEndFails
+        ? { ok: false, status: 500, json: function () { return Promise.resolve({}); } }
+        : { ok: true, json: function () {
+            return Promise.resolve({
+              session_id: url.split("/")[3], status: "completed",
+              outcome: "resolved", summary: "saved",
+            });
+          } });
+    }
     return Promise.resolve({
       ok: true,
       json: function () {
@@ -252,6 +306,16 @@ function mountFake(opts) {
 
   function statusText() { return els["call-status"].textContent; }
   function stateText() { return els["call-state"].textContent; }
+  function sessionText() { return els["call-session"].textContent; }
+  /** Rendered transcript rows as "Label :: text" strings, in DOM order. */
+  function transcriptRows() {
+    return els["call-transcript"].children.map(function (row) {
+      return row.children.map(function (cell) { return cell.textContent; }).join(" :: ");
+    });
+  }
+  function sessionCalls() {
+    return sent.filter(function (s) { return s.url.indexOf("/api/session") === 0; });
+  }
 
   function cleanup() {
     restoreAll();
@@ -280,6 +344,11 @@ function mountFake(opts) {
     totalAborts: totalAborts,
     statusText: statusText,
     stateText: stateText,
+    sessionText: sessionText,
+    transcriptRows: transcriptRows,
+    sessionCalls: sessionCalls,
+    domEvents: domEvents,
+    FAKE_SESSION_ID: FAKE_SESSION_ID,
     spoken: spoken,
     sent: sent,
     ttsStops: function () { return ttsStops; },
@@ -586,6 +655,181 @@ async function testHumanAgentHandoffReplyIsSpoken() {
   } finally { b.cleanup(); }
 }
 
+// ── 16) Task 4: the call shows a VISIBLE, speaker-labeled transcript in strict
+//        chronological order - system events, the greeting, what the customer
+//        said, and the spoken reply all appear as rendered lines. ──
+async function testCallTranscriptIsVisibleLabeledAndOrdered() {
+  const b = mountFake({ tts: true });
+  try {
+    toListening(b);
+    b.emitResult("where is my order?", true); // terminator -> sends at once
+    b.advance(1);
+    await flush(); // reply rendered + spoken
+    b.emitTts({ speaking: true });
+    b.emitTts({ speaking: false }); // reply finished -> listening again
+    b.emitResult("and the return policy?", true);
+    b.advance(1);
+    await flush();
+    b.clickEnd();
+
+    const rows = b.transcriptRows();
+    assert.strictEqual(rows[1], "System :: Call started", "call start is labeled");
+    assert.ok(rows[2].indexOf("Nova AI ::") === 0 && /Hello! This is Nova AI/.test(rows[2]),
+      "the greeting appears labeled as Nova AI (got: " + rows[2] + ")");
+    assert.strictEqual(rows[3], "You :: where is my order?",
+      "recognized SPEECH appears in the transcript with a clear speaker label");
+    assert.strictEqual(rows[4], "Nova AI :: Please share your order number.",
+      "the spoken reply is ALSO shown as text (voice responses appear in the transcript)");
+    assert.strictEqual(rows[5], "You :: and the return policy?", "chronological order holds");
+    assert.strictEqual(rows[rows.length - 1], "System :: Call ended", "and the end is recorded");
+  } finally { b.cleanup(); }
+}
+
+// ── 17) Task 5 F: consent DEFAULTS OFF. An unrecorded call still works fully,
+//        but not a single session request is ever made and the note says so. ──
+async function testConsentOffStoresNothingAndSaysSo() {
+  const b = mountFake({ tts: true }); // consent checkbox left unchecked
+  try {
+    toListening(b);
+    assert.ok(/not stored/i.test(b.sessionText()),
+      "the panel states honestly that nothing is being stored (got: " + b.sessionText() + ")");
+    b.emitResult("where is my order?", true);
+    b.advance(1);
+    await flush();
+    b.clickEnd();
+    await flush();
+    assert.strictEqual(b.sessionCalls().length, 0,
+      "declined consent makes ZERO session API calls - nothing is persisted");
+    assert.strictEqual(b.sent.length, 1, "only the /api/chat turn ran");
+  } finally { b.cleanup(); }
+}
+
+// ── 18) Task 5 full consent flow: start -> real turn -> end stores the exact
+//        transcript turn with the BACKEND intent; a second End click cannot
+//        re-send it; the history view is notified via a DOM event. ──
+async function testConsentOnRecordsSessionTurnsWithIntents() {
+  const b = mountFake({
+    tts: true,
+    consent: true,
+    chatReply: {
+      intent: "faq",
+      reply: "Returns are accepted within 14 days of delivery.",
+      source: "faq_kb:returns:sample",
+    },
+  });
+  try {
+    toListening(b);
+    b.emitResult("what is your return policy?", true);
+    b.advance(1);
+    await flush(); // reply rendered, spoken, and recorded with its intent
+    b.clickEnd();
+    await flush();
+    await flush(); // the end POST resolves through two .then hops
+
+    const calls = b.sessionCalls();
+    assert.strictEqual(calls.length, 2, "one start + one end, no more");
+    assert.strictEqual(calls[0].url, "/api/session/start");
+    assert.deepStrictEqual(JSON.parse(calls[0].body), { consent: true, channel: "voice" },
+      "start carries the explicit consent and the voice channel");
+    assert.strictEqual(calls[1].url, "/api/session/" + b.FAKE_SESSION_ID + "/end",
+      "end targets the id the server issued");
+    const body = JSON.parse(calls[1].body);
+    assert.strictEqual(body.turns.length, 1,
+      "exactly ONE recorded turn - the greeting is shown but never recorded as customer speech");
+    assert.strictEqual(body.turns[0].customer, "what is your return policy?");
+    assert.strictEqual(body.turns[0].reply, "Returns are accepted within 14 days of delivery.");
+    assert.strictEqual(body.turns[0].intent, "faq",
+      "the REAL backend intent is stored, so the summary cannot invent topics");
+    assert.ok(b.domEvents.indexOf("nova:session-saved") !== -1,
+      "the staff history view is notified to refresh");
+    assert.ok(/saved/i.test(b.sessionText()), "and the panel says the summary was saved");
+
+    b.clickEnd(); // a second End click must NEVER duplicate the record
+    await flush();
+    assert.strictEqual(b.sessionCalls().length, 2, "the record is claimed exactly once");
+  } finally { b.cleanup(); }
+}
+
+// ── 19) No-duplicate guarantee at the voice layer: if recognition fires the
+//        SAME final again inside the dedupe window, it is submitted AND
+//        rendered exactly once. ──
+async function testRepeatedRecognitionCallbackDoesNotDuplicate() {
+  const b = mountFake({ tts: true });
+  try {
+    toListening(b);
+    b.emitResult("where is my parcel?", true);
+    b.advance(1);
+    await flush(); // answered and spoken
+
+    // Chrome re-delivering the same final segment (the classic duplicate):
+    b.emitResult("where is my parcel?", true);
+    b.advance(800); // under the 1500ms duplicate window
+    await flush();
+
+    assert.strictEqual(b.sent.length, 1, "the duplicate is NOT sent to /api/chat");
+    const userRows = b.transcriptRows().filter(function (r) {
+      return r.indexOf("You ::") === 0;
+    });
+    assert.strictEqual(userRows.length, 1, "and it is NOT rendered twice in the transcript");
+  } finally { b.cleanup(); }
+}
+
+// ── 20) Task 3 A, unsupported browser: without SpeechRecognition the Start
+//        button stays disabled and the reason is stated - text paths untouched. ──
+async function testUnsupportedRecognitionDisablesCallHonestly() {
+  const b = mountFake({ tts: true, noRecognition: true });
+  try {
+    assert.strictEqual(b.els["call-start"].disabled, true,
+      "a browser without speech recognition cannot start a voice call");
+    assert.ok(/speech recognition/i.test(b.statusText()),
+      "and the status names the real reason (got: " + b.statusText() + ")");
+    assert.strictEqual(b.stateText(), "Idle", "the call never pretends to be live");
+  } finally { b.cleanup(); }
+}
+
+// ── 21) Task 3 B, graceful text-only fallback: with NO speechSynthesis at all
+//        the call still runs, and every reply still appears in the transcript. ──
+async function testNoTtsCallStillWorksAsTextOnly() {
+  const b = mountFake({}); // no TTS global at all
+  try {
+    b.clickStart();
+    b.advance(5); // the no-audio path hands the floor back on a 0ms timer
+    assert.strictEqual(b.spoken.length, 0, "nothing was (or claims to be) spoken");
+    assert.strictEqual(b.stateText(), "Listening", "the call still reaches Listening");
+
+    b.emitResult("hello there?", true);
+    b.advance(1);
+    await flush();
+    b.advance(5); // reply "spoken" -> without audio, back to listening
+    const rows = b.transcriptRows();
+    assert.ok(rows.indexOf("Nova AI :: Please share your order number.") !== -1,
+      "the reply still reaches the VISIBLE transcript (text-only fallback)");
+    assert.strictEqual(b.spoken.length, 0, "and still no fake audio claim");
+  } finally { b.cleanup(); }
+}
+
+// ── 22) A failing session API NEVER breaks the call: the failure is stated
+//        honestly, no end-save is attempted for a session that never started,
+//        and the conversation itself continues normally. ──
+async function testSessionApiFailureDoesNotBreakTheCall() {
+  const b = mountFake({ tts: true, consent: true, sessionStartFails: true });
+  try {
+    toListening(b);
+    await flush(); // the rejected start POST settles on a later microtask
+    assert.ok(/could not start/i.test(b.sessionText()),
+      "the recording failure is admitted openly (got: " + b.sessionText() + ")");
+    b.emitResult("where is my order?", true);
+    b.advance(1);
+    await flush();
+    assert.ok(b.spoken.length >= 1, "the call keeps answering normally");
+    b.clickEnd();
+    await flush();
+    const urls = b.sessionCalls().map(function (c) { return c.url; });
+    assert.deepStrictEqual(urls, ["/api/session/start"],
+      "no end-save is attempted for a session that never started");
+  } finally { b.cleanup(); }
+}
+
 const tests = [
   ["1) listening arms one session", testListeningArmsOneSession],
   ["2) silently dead session is re-armed", testSilentlyDeadSessionIsReArmed],
@@ -602,6 +846,13 @@ const tests = [
   ["13) changing voice language re-arms recognition", testChangeVoiceLanguageReArmsRecognition],
   ["14) recognized-text diagnostics are a separate opt-in", testRecognizedTextIsSeparateOptIn],
   ["15) human-agent handoff reply is spoken verbatim", testHumanAgentHandoffReplyIsSpoken],
+  ["16) call transcript is visible, labeled, chronological", testCallTranscriptIsVisibleLabeledAndOrdered],
+  ["17) consent OFF stores nothing and says so", testConsentOffStoresNothingAndSaysSo],
+  ["18) consent ON records turns with real intents, once", testConsentOnRecordsSessionTurnsWithIntents],
+  ["19) repeated recognition callback never duplicates", testRepeatedRecognitionCallbackDoesNotDuplicate],
+  ["20) unsupported recognition disables the call honestly", testUnsupportedRecognitionDisablesCallHonestly],
+  ["21) no-TTS browsers still get a working text-only call", testNoTtsCallStillWorksAsTextOnly],
+  ["22) session API failure never breaks the call", testSessionApiFailureDoesNotBreakTheCall],
 ];
 
 (async function run() {

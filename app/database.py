@@ -11,6 +11,10 @@ Data-source rule (project policy):
 - SQLite is the ONLY source of truth for order information.
 - No language model may invent or override an order status.
 
+The simulated call-session records (Task 5) share this plumbing: their
+schema lives in app/sessions.py and is created here too, so a fresh
+database has both tables from the start.
+
 SQLite comes built into Python (the stdlib "sqlite3" module) — nothing extra
 to install.
 """
@@ -61,10 +65,16 @@ def get_connection(db_path=None):
 
 def init_db(db_path=None):
     """Create the tables if they don't exist yet. Safe to call repeatedly
-    because of "CREATE TABLE IF NOT EXISTS"."""
+    because of "CREATE TABLE IF NOT EXISTS" — existing data is preserved.
+
+    Also creates the call_sessions table (simulated call records), so an
+    older database file upgrades backward-compatibly with no manual step.
+    The import is local to avoid a circular import (sessions.py imports us).
+    """
+    from .sessions import SESSIONS_SCHEMA  # local: prevents circular import
     conn = get_connection(db_path)
     try:
-        conn.executescript(ORDERS_SCHEMA)
+        conn.executescript(ORDERS_SCHEMA + "\n" + SESSIONS_SCHEMA)
         conn.commit()
     finally:
         conn.close()

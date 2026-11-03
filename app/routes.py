@@ -15,6 +15,7 @@ chat, etc.) are added in later phases.
 from flask import Blueprint, current_app, jsonify, request, send_from_directory
 
 from . import rate_limit
+from . import sessions
 from .assistant import FALLBACK_REPLY, respond
 from .orders import find_order
 
@@ -162,3 +163,167 @@ def chat():
         # shape with a polite fallback (never claim an issue was resolved).
         result = {"intent": "fallback", "reply": FALLBACK_REPLY, "source": "none"}
     return jsonify(result), 200
+
+
+# ── Simulated call-session records (Task 5) ────────────────────────────────
+# These endpoints store LOCAL records of the browser-SIMULATED calls only.
+# No telephone call is placed and no real person is contacted or notified.
+# A record exists ONLY when the customer gave explicit consent, and every
+# error answer is safe JSON - never a traceback, path, or internal detail.
+
+def _storage_error():
+    """The one safe 500 answer shared by all session endpoints."""
+    current_app.logger.exception("Call-session storage failed")
+    return (
+        jsonify(
+            error="storage_error",
+            message=(
+                "We could not reach the session record store right now. "
+                "The conversation itself still works; nothing was lost on "
+                "your side. Please try again shortly."
+            ),
+        ),
+        500,
+    )
+
+
+@api_bp.post("/session/start")
+def session_start():
+    """Begin a simulated-call session RECORD, strictly after explicit consent.
+
+    Body: {"consent": bool, "channel": "voice"|"text"}.
+    With consent a row is created (status 'active') and its session id is
+    returned. WITHOUT consent nothing at all is written - the response says
+    so honestly and the caller simply keeps an unrecorded session.
+    """
+    limited = _rate_limit_response()
+    if limited is not None:
+        return limited
+
+    payload = request.get_json(silent=True)
+    if not isinstance(payload, dict):
+        payload = {}
+    consent = payload.get("consent") is True  # strict: only real true consents
+    channel = payload.get("channel", "voice")
+    if channel not in sessions.CHANNELS:
+        return (
+            jsonify(
+                error="invalid_request",
+                message="channel must be 'voice' or 'text'.",
+            ),
+            400,
+        )
+    try:
+        record = sessions.start_session(
+            db_path=current_app.config["DB_PATH"],
+            channel=channel,
+            consent=consent,
+        )
+    except Exception:
+        return _storage_error()
+    return jsonify(record), 200
+
+
+@api_bp.post("/session/<session_id>/end")
+def session_end(session_id):
+    """Close a consented session: store transcript, intents, outcome, summary.
+
+    Body: {"turns": [{"customer": str, "reply": str, "intent": str}, ...]}.
+    Turns are sanitized (unknown intents -> 'other', sizes capped); the
+    outcome and summary are derived server-side and are honest - never a
+    claimed resolution, never a claimed human notification.
+    """
+    limited = _rate_limit_response()
+    if limited is not None:
+        return limited
+
+    payload = request.get_json(silent=True)
+    if not isinstance(payload, dict):
+        payload = {}
+    turns = payload.get("turns")
+    db_path = current_app.config["DB_PATH"]
+    try:
+        record = sessions.end_session(
+            db_path=db_path, session_id=session_id, turns=turns
+        )
+    except sessions.SessionNotFoundError:
+        return (
+            jsonify(
+                error="not_found",
+                message="That session was not recorded (it may have run "
+                        "without consent, or the id is unknown).",
+            ),
+            404,
+        )
+    except sessions.SessionAlreadyEndedError:
+        # Honest refusal instead of silently overwriting the first ending.
+        return (
+            jsonify(
+                error="already_ended",
+                message="That simulated session was already ended and stored.",
+            ),
+            409,
+        )
+    except ValueError:
+        return (
+            jsonify(
+                error="invalid_request",
+                message="That session id is not valid for this demo.",
+            ),
+            400,
+        )
+    except Exception:
+        return _storage_error()
+    return jsonify(record), 200
+
+
+@api_bp.get("/sessions")
+def sessions_list():
+    """Staff history view: recent sessions, newest first.
+
+    Metadata + summary ONLY - the raw transcript is deliberately not listed
+    (do not expose conversation content unnecessarily). Use the single-session
+    endpoint to open one consented record in full.
+    """
+    limited = _rate_limit_response()
+    if limited is not None:
+        return limited
+    try:
+        items = sessions.list_sessions(
+            db_path=current_app.config["DB_PATH"],
+            limit=request.args.get("limit", 20),
+        )
+    except Exception:
+        return _storage_error()
+    return jsonify(sessions=items), 200
+
+
+@api_bp.get("/session/<session_id>")
+def session_detail(session_id):
+    """One full consented session record, transcript included."""
+    limited = _rate_limit_response()
+    if limited is not None:
+        return limited
+    try:
+        record = sessions.get_session(
+            db_path=current_app.config["DB_PATH"], session_id=session_id
+        )
+    except sessions.SessionNotFoundError:
+        return (
+            jsonify(
+                error="not_found",
+                message="No stored session matches that id.",
+            ),
+            404,
+        )
+    except ValueError:
+        return (
+            jsonify(
+                error="invalid_request",
+                message="That session id is not valid for this demo.",
+            ),
+            400,
+        )
+    except Exception:
+        return _storage_error()
+    return jsonify(record), 200

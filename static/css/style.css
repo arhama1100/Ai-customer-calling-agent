@@ -1295,3 +1295,159 @@ button:disabled {
     transition: none;
   }
 }
+
+/* ── Call transcript + recording consent (Tasks 4/5) ──
+   The live transcript lives inside the call card; rows are speaker-labeled
+   and the panel scrolls, so long conversations never stretch the layout. */
+.call-consent {
+  display: flex;
+  gap: 8px;
+  align-items: flex-start;
+  margin: 10px 0 4px;
+  font-size: 0.78rem;
+  color: var(--muted);
+  line-height: 1.45;
+  cursor: pointer;
+}
+
+.call-consent input[type="checkbox"] {
+  margin-top: 2px;
+  accent-color: var(--violet);
+  flex: none;
+}
+
+.call-session {
+  margin: 4px 0;
+  font-size: 0.75rem;
+  color: var(--faint);
+  min-height: 1em;
+}
+
+.call-session.error { color: var(--danger); }
+
+.call-transcript {
+  margin-top: 8px;
+  max-height: 210px;
+  overflow-y: auto;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  scrollbar-width: thin;
+  scrollbar-color: var(--violet-deep) transparent;
+}
+
+.ct-row {
+  display: flex;
+  gap: 8px;
+  align-items: baseline;
+  font-size: 0.8rem;
+  line-height: 1.4;
+  color: var(--ink);
+  text-align: left;
+}
+
+.ct-label {
+  flex: none;
+  font-size: 0.66rem;
+  font-weight: 700;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+  color: var(--glow);
+}
+
+.ct-row.ct-user .ct-label { color: var(--ok); }
+.ct-row.ct-system { color: var(--faint); font-size: 0.72rem; }
+.ct-row.ct-system .ct-label { color: var(--faint); }
+
+.ct-text {
+  overflow-wrap: anywhere; /* long dictated numbers cannot break the layout */
+}
+
+/* Text-chat transcript labels (Task 4): speaker name above every bubble. */
+.msg-role {
+  display: block;
+  font-size: 0.62rem;
+  font-weight: 700;
+  letter-spacing: 0.05em;
+  text-transform: uppercase;
+  color: var(--faint);
+  margin-bottom: 3px;
+}
+
+.msg.user .msg-role { color: var(--ok); }
+.msg.bot .msg-role { color: var(--glow); }
+
+/* ── Simulated session history (Task 5 D) ── */
+.history-actions {
+  display: flex;
+  justify-content: flex-end;
+  margin-bottom: 12px;
+}
+
+.history-list {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+
+.history-note {
+  color: var(--muted);
+  font-size: 0.85rem;
+  padding: 14px;
+  border: 1px dashed var(--line);
+  border-radius: 12px;
+  text-align: center;
+}
+
+.history-note.error { color: var(--danger); border-color: var(--danger-deep); }
+
+.history-card {
+  background: var(--surface);
+  border: 1px solid var(--line);
+  border-radius: 14px;
+  padding: 14px 16px;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.history-head {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 10px;
+  align-items: center;
+  font-size: 0.78rem;
+  color: var(--muted);
+}
+
+.history-channel {
+  text-transform: capitalize;
+  color: var(--faint);
+}
+
+.history-followup {
+  background: rgba(240, 113, 131, 0.14);
+  color: var(--danger);
+  border: 1px solid var(--danger-deep);
+  border-radius: 999px;
+  padding: 2px 10px;
+  font-size: 0.7rem;
+  font-weight: 700;
+}
+
+.history-meta {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 12px;
+  font-size: 0.78rem;
+}
+
+.history-intent { color: var(--glow); }
+.history-outcome { color: var(--ink); }
+.history-summary {
+  margin: 0;
+  font-size: 0.84rem;
+  line-height: 1.5;
+  color: var(--muted);
+  overflow-wrap: anywhere;
+}

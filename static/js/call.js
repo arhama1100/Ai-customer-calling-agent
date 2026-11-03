@@ -6,9 +6,12 @@
   hands-free voice loop of  mic -> /api/chat -> spoken reply, driven only by the
   browser Web Speech APIs.
 
-  The call is a VOICE-ONLY experience: it shows a large animated orb + a short
-  status line ("Listening…", "AI is speaking…"), NOT a chat transcript. It never
-  writes into the text-chat log, so the Chat workspace stays independent.
+  The call is a VOICE-FIRST experience: a large animated orb + status line
+  ("Listening...", "AI is speaking...") AND - since Task 4 - its own visible,
+  speaker-labeled transcript panel (#call-transcript). It still never writes
+  into the text-chat log, so the Chat workspace stays independent. With the
+  consent checkbox ticked, each call also becomes a local session RECORD
+  (Task 5, /api/session/*); unticked, nothing is persisted at all.
 
   Architecture — two clearly separated halves:
 
@@ -22,7 +25,8 @@
   2) mountBrowserCall()  — thin glue. It builds ONE continuous SpeechRecognition
      session for the call (stt.js's one-shot "draft + manual Send" recognizer
      cannot support hands-free interruption), reuses the EXISTING global TTS
-     module for speaking/stop, shows only orb+status (no transcript), and calls
+     module for speaking/stop, renders the call transcript panel, manages the
+     consent-gated session record, and calls
      the SAME /api/chat with the SAME {message} -> {intent, reply, source}.
 
   IMPORTANT (greeting-audio fix): tts.js/stt.js expose their modules as top-level
@@ -86,9 +90,10 @@
       deps.tts || { speak: function () {}, stop: function () {}, isSpeaking: function () { return false; } };
     var recognition =
       deps.recognition || { start: function () {}, stop: function () {}, abort: function () {} };
-    // The transcript sink is OPTIONAL. The browser glue deliberately passes NO
-    // transcript (voice-only, hidden), while the Node tests pass a recorder to
-    // observe behavior. Either way the call still processes and responds.
+    // The transcript sink is OPTIONAL. The browser glue passes a real one
+    // (visible labeled panel + session turn recorder); Node tests pass a
+    // recorder to observe behavior. Either way the call still processes and
+    // responds.
     var transcript =
       deps.transcript || { addUser: function () {}, addBot: function () {}, addSystem: function () {} };
     var status = deps.status || function () {};
@@ -100,6 +105,11 @@
     // receives a stage name plus safe metrics (lengths, flags) - never the
     // customer's words, because an order number is customer data.
     var onEvent = deps.onEvent || function () {};
+    // Optional turn recorder: called ONLY for a FRESH reply that we actually
+    // render, with the exact customer text and the full {intent, reply, source}
+    // data. The browser glue uses it to build the session transcript Task 5
+    // stores; stale/failed answers never reach it, so nothing is recorded twice.
+    var onReply = deps.onReply || null;
 
     var timers = deps.timers || {};
     var setIntervalFn = timers.setInterval || (typeof setInterval !== "undefined" ? setInterval : null);
@@ -442,7 +452,10 @@
           return;
         }
         onEvent("reply", "len=" + data.reply.length);
-        transcript.addBot(data.reply); // no-op in the voice-only browser glue
+        transcript.addBot(data.reply); // visible labeled line + turn record
+        if (onReply) {
+          try { onReply(message, data); } catch (e) { /* a broken sink must never silence the call */ }
+        }
         speakLine(data.reply);
       }).catch(function () {
         if (!callActive || myCall !== callId || mySeq !== requestSeq) {
@@ -530,6 +543,11 @@
     var orbEl = document.getElementById("call-orb");
     var micBtn = document.getElementById("mic-btn");
     var langSel = document.getElementById("stt-lang");
+    // Task 4: a VISIBLE transcript panel inside the call card. Task 5: the
+    // consent checkbox + a small line that states honestly what is recorded.
+    var transcriptEl = document.getElementById("call-transcript");
+    var consentChk = document.getElementById("call-consent");
+    var sessionEl = document.getElementById("call-session");
     if (!startBtn || !endBtn || !muteBtn) {
       return null; // call UI not present on this page
     }
@@ -542,9 +560,140 @@
     var TTSMod = (typeof TTS !== "undefined") ? TTS : null;
     var ttsSupported = !!(TTSMod && TTSMod.supported);
 
-    // The voice-only call shows NO transcript: the controller is given no
-    // transcript sink, so its addBot/addUser/addSystem calls are inert no-ops
-    // and nothing ever reaches the chat log.
+    // ── Visible call transcript (Task 4) + recorded turns (Task 5) ──
+    // Renders every spoken line with a clear speaker label, in order, and
+    // keeps the DOM bounded so a long call cannot grow without limit. The
+    // same sink hands the controller exactly one user/bot pair per answered
+    // turn; the controller's duplicate + stale guards mean nothing is ever
+    // recorded twice even if recognition or a callback fires again.
+    var MAX_TRANSCRIPT_ROWS = 300;
+    var ROLE_LABEL = { user: "You", bot: "Nova AI", system: "System" };
+    var renderedRows = [];
+    function renderRow(role, text) {
+      if (!transcriptEl || typeof document.createElement !== "function") return;
+      var row = document.createElement("div");
+      row.className = "ct-row ct-" + role;
+      var label = document.createElement("span");
+      label.className = "ct-label";
+      label.textContent = ROLE_LABEL[role] || role;
+      var body = document.createElement("span");
+      body.className = "ct-text";
+      body.textContent = String(text || ""); // textContent: never HTML
+      row.appendChild(label);
+      row.appendChild(body);
+      transcriptEl.appendChild(row);
+      renderedRows.push(row);
+      while (renderedRows.length > MAX_TRANSCRIPT_ROWS) {
+        var oldest = renderedRows.shift();
+        if (oldest && transcriptEl.removeChild) {
+          try { transcriptEl.removeChild(oldest); } catch (e) { /* detached already */ }
+        }
+      }
+      // Keep the newest line visible when the panel is scrollable.
+      if ("scrollTop" in transcriptEl) transcriptEl.scrollTop = transcriptEl.scrollHeight;
+    }
+    function clearRows() {
+      while (renderedRows.length) {
+        var row = renderedRows.shift();
+        if (row && transcriptEl && transcriptEl.removeChild) {
+          try { transcriptEl.removeChild(row); } catch (e) { /* ignore */ }
+        }
+      }
+    }
+
+    var sessionTurns = [];
+    var pendingTurn = null;
+    var sink = {
+      addUser: function (text) {
+        renderRow("user", text);
+        pendingTurn = { customer: String(text || ""), reply: "", intent: "" };
+      },
+      addBot: function (text) {
+        renderRow("bot", text);
+        if (pendingTurn) {
+          pendingTurn.reply = String(text || "");
+          sessionTurns.push(pendingTurn);
+          pendingTurn = null;
+        }
+        // A bot line with no customer turn behind it is the greeting: shown
+        // in the transcript, but never recorded as if the customer said more.
+      },
+      addSystem: function (text) { renderRow("system", text); },
+      noteIntent: function (intent) {
+        var last = sessionTurns[sessionTurns.length - 1];
+        if (last && !last.intent) last.intent = String(intent || "other");
+      },
+      turns: function () {
+        return sessionTurns.map(function (t) {
+          return { customer: t.customer, reply: t.reply, intent: t.intent || "other" };
+        });
+      },
+      reset: function () {
+        clearRows();
+        sessionTurns = [];
+        pendingTurn = null;
+      },
+    };
+
+    // ── Session record lifecycle (Task 5) — CONSENT GATED ──
+    // Nothing is stored unless the checkbox was ticked when the call started.
+    // Session API failures NEVER break the call: they are stated honestly.
+    var sessionId = null;
+    function sessionNote(text, isError) {
+      if (!sessionEl) return;
+      sessionEl.textContent = text;
+      if (sessionEl.classList) {
+        if (isError) sessionEl.classList.add("error");
+        else sessionEl.classList.remove("error");
+      }
+    }
+    function postJSON(url, body) {
+      return fetch(url, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(body),
+      }).then(function (r) {
+        if (!r.ok) throw new Error("server error (" + r.status + ")");
+        return r.json();
+      });
+    }
+    function beginSessionRecord() {
+      sessionId = null;
+      var consented = !!(consentChk && consentChk.checked);
+      if (!consented) {
+        sessionNote("Recording is OFF: this simulated call is not stored anywhere.", false);
+        return;
+      }
+      sessionNote("Starting local recording (consent given)…", false);
+      postJSON("/api/session/start", { consent: true, channel: "voice" })
+        .then(function (d) {
+          if (d && typeof d.session_id === "string" && d.session_id) {
+            sessionId = d.session_id;
+            sessionNote("Recording ON: this simulated call will be saved in the local demo history.", false);
+          } else {
+            sessionNote("Recording was not started; this call will not be stored.", true);
+          }
+        })
+        .catch(function () {
+          sessionNote("Recording could not start. The call still works - it just will not be stored.", true);
+        });
+    }
+    function finishSessionRecord() {
+      if (!sessionId) return; // nothing (or nothing more) to save
+      var sid = sessionId;
+      sessionId = null; // claimed once: a double End click can never re-send
+      postJSON("/api/session/" + sid + "/end", { turns: sink.turns() })
+        .then(function () {
+          sessionNote("Session summary saved. Staff can review it in the simulated session history below.", false);
+          try {
+            document.dispatchEvent({ type: "nova:session-saved" });
+          } catch (e) { /* no DOM events: history refreshes manually */ }
+        })
+        .catch(function () {
+          sessionNote("The session record could not be saved just now.", true);
+        });
+    }
+
     var errText = null; // last hard error message, so we don't clobber it
     var lastPublishedState = null; // diagnostics: log each transition once
     // The duration ticker repaints the status line EVERY second, which used to
@@ -886,14 +1035,17 @@
     };
 
     // ── Build the pure controller with the browser adapters wired in ──
-    // NOTE: no `transcript` is passed -> the call renders NO bubbles (voice-only).
+    // The visible transcript sink doubles as the session turn recorder; the
+    // controller's own guards (duplicates, echo, stale replies) keep it exact.
     controller = createCallController({
       tts: ttsAdapter,
       recognition: recognitionAdapter,
+      transcript: sink,
       status: status,
       state: publishState,
       getLang: preferredLang,
       chat: chatClient,
+      onReply: function (message, data) { sink.noteIntent(data && data.intent); },
       onEvent: dlog, // sees the pipeline stages; changes nothing
     });
     // From now on a "Listening" claim is checked, never trusted blindly.
@@ -996,9 +1148,15 @@
     startBtn.addEventListener("click", function () {
       warmUpSpeech();
       warmUpMicrophone();
+      sink.reset(); // a new call starts a fresh transcript, fresh turns
+      renderRow("system", "Call transcript - typed speech and Nova AI replies appear here, in order.");
       controller.startCall();
+      beginSessionRecord(); // consent-gated; never blocks the call
     });
-    endBtn.addEventListener("click", function () { controller.endCall(); });
+    endBtn.addEventListener("click", function () {
+      controller.endCall();
+      finishSessionRecord(); // only does anything when consent was given
+    });
     muteBtn.addEventListener("click", function () { controller.toggleMute(); });
 
     // Changing the Voice language must actually change RECOGNITION, not just a

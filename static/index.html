@@ -37,6 +37,7 @@
         <li><a href="#features">Features</a></li>
         <li><a href="#how-it-works">How It Works</a></li>
         <li><a href="#use-cases">Use Cases</a></li>
+        <li><a href="#history">History</a></li>
         <li><a href="#faq">FAQ</a></li>
       </ul>
       <a class="btn btn-primary btn-sm nav-cta" href="#agent">Try the AI Agent</a>
@@ -79,6 +80,18 @@
               <button id="call-end" type="button" class="call-btn call-end" disabled>End Call</button>
               <button id="call-mute" type="button" class="call-btn call-mute" disabled>Mute</button>
             </div>
+            <!-- Recording consent (Task 5 F): OFF by default; nothing is
+                 persisted unless the customer ticks this BEFORE starting. -->
+            <label class="call-consent" for="call-consent">
+              <input type="checkbox" id="call-consent" />
+              <span>Record this simulated call: saves its transcript and summary
+                to this demo's local database only. Nova AI is an automated
+                assistant; no real person is contacted.</span>
+            </label>
+            <p id="call-session" class="call-session" role="status"></p>
+            <!-- Live call transcript (Task 4): speaker-labeled, chronological,
+                 wired by call.js. -->
+            <div id="call-transcript" class="call-transcript" aria-live="polite"></div>
             <p class="call-fineprint">
               Simulated browser call. This demo does not place real phone calls.
             </p>
@@ -259,6 +272,30 @@
         </p>
       </section>
 
+      <!-- ── Simulated session history (Task 5 D): staff view of stored,
+             consented demo sessions. Rendered by static/js/sessions.js from
+             /api/sessions - metadata and honest summaries only. ── -->
+      <section class="section" id="history">
+        <h2 class="section-title is-centered">Simulated session history</h2>
+        <p class="section-lead is-centered">
+          Previous browser-simulated calls that the customer agreed to record.
+          No real telephone calls were placed and no real person was notified.
+        </p>
+        <div class="history-actions">
+          <button id="history-refresh" type="button" class="btn btn-ghost btn-sm">
+            Refresh
+          </button>
+        </div>
+        <div id="history-list" class="history-list" aria-live="polite"></div>
+        <p class="demo-fineprint">
+          Records exist only for consented calls and are stored in this demo's
+          local SQLite database. Outcomes and summaries are generated from the
+          intents the assistant actually detected - never invented. Sessions
+          marked &ldquo;Requires staff follow-up&rdquo; need a real person to
+          act later; this page does not alert anyone.
+        </p>
+      </section>
+
       <!-- ── Use cases ── -->
       <section class="section" id="use-cases">
         <div class="panel panel-light">
@@ -382,6 +419,7 @@
             <a href="#features">Features</a>
             <a href="#how-it-works">How It Works</a>
             <a href="#use-cases">Use Cases</a>
+            <a href="#history">History</a>
             <a href="#faq">FAQ</a>
             <a href="#agent">Live demo</a>
           </nav>
@@ -399,6 +437,7 @@
     <script src="/static/js/stt.js"></script>
     <script src="/static/js/app.js"></script>
     <script src="/static/js/call.js"></script>
+    <script src="/static/js/sessions.js"></script>
     <script src="/static/js/nova.js"></script>
   </body>
 </html>

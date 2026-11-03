@@ -578,6 +578,56 @@ async function testFlushSpeechSubmitsPendingTurnOnce() {
   assert.strictEqual(c.pending.length, 1, "the cancelled timer must not resend it");
 }
 
+// ── 24) Task 3 A: empty or whitespace-only "speech" must NEVER become a turn —
+//        neither via the recognition path nor via a direct submit.
+async function testWhitespaceSpeechNeverSubmits() {
+  const c = makeCtx();
+  c.controller.startCall();
+  c.controller.onTtsEnded();
+
+  c.controller.handleSpeech("   ", true);
+  c.controller.handleSpeech("", true);
+  c.drainTimers();
+  c.runDueTimers();
+  assert.strictEqual(c.pending.length, 0, "empty speech never reaches the backend");
+  assert.strictEqual(c.user.length, 0, "and never enters the transcript");
+
+  c.controller.submitUtterance("   ");
+  assert.strictEqual(c.pending.length, 0, "a direct empty submit is dropped too");
+}
+
+// ── 25) Task 5 hook: onReply fires EXACTLY ONCE per FRESH reply with the exact
+//        customer text plus the full {intent, reply, source} data - and never
+//        for a stale (superseded) answer, so a session record cannot duplicate
+//        or mislabel turns.
+async function testOnReplyHookSeesOnlyFreshAnswers() {
+  const seen = [];
+  const c = makeCtx({
+    onReply: function (message, data) { seen.push({ message: message, data: data }); },
+  });
+  c.controller.startCall();
+  c.controller.onTtsEnded();
+
+  c.controller.submitUtterance("first question?");
+  c.controller.submitUtterance("second question?");
+  assert.strictEqual(c.pending.length, 2, "both requests are in flight");
+
+  // The OLDER answer arrives late: it is stale and must be ignored entirely.
+  c.pending[0].resolve({ intent: "faq", reply: "old answer", source: "faq_kb" });
+  await flush();
+  assert.strictEqual(seen.length, 0, "a stale reply never reaches the recorder");
+
+  c.pending[1].resolve({ intent: "business_hours", reply: "fresh answer", source: "faq_kb:business_hours:sample" });
+  await flush();
+  assert.strictEqual(seen.length, 1, "exactly one record for the fresh reply");
+  assert.strictEqual(seen[0].message, "second question?", "with the exact customer text");
+  assert.strictEqual(seen[0].data.intent, "business_hours", "and the real backend intent");
+  // Transcript lines: the greeting + exactly ONE answer. The stale "old answer"
+  // must never appear, so a session record can not show a phantom reply.
+  assert.deepStrictEqual(c.bot, [c.spoken[0], "fresh answer"],
+    "exactly one transcript line for the fresh reply (plus the greeting)");
+}
+
 (async function run() {
   const tests = [
     testLifecycleAndGreeting,
@@ -603,6 +653,8 @@ async function testFlushSpeechSubmitsPendingTurnOnce() {
     testUnfinishedTurnIsBoundedByConfigurableCap,
     testStaleEngineFlagDoesNotCancelAudio,
     testEventTraceShowsPipelineStages,
+    testWhitespaceSpeechNeverSubmits,
+    testOnReplyHookSeesOnlyFreshAnswers,
   ];
   let pass = 0;
   let fail = 0;

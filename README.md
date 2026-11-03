@@ -7,7 +7,7 @@ an answer.
 
 ![Python](https://img.shields.io/badge/python-3.x-blue)
 ![Flask](https://img.shields.io/badge/flask-REST-lightgrey)
-![Tests](https://img.shields.io/badge/tests-431%20Python%20%C2%B7%2037%20JS-brightgreen)
+![Tests](https://img.shields.io/badge/tests-536%20Python%20%C2%B7%2047%20JS-brightgreen)
 ![Gemini](https://img.shields.io/badge/Gemini-optional%2C%20off%20by%20default-orange)
 
 > **Not a phone system.** Despite the name, there is no telephony — "calling"
@@ -39,6 +39,17 @@ shop data, policies, and sample numbers are fictional demonstration content.
 - **Text chat** that always works — the primary, guaranteed path.
 - **Simulated voice calls** — hands-free mode with spoken greeting, barge-in,
   digit-by-digit order-number buffering, mute, and graceful fallback to text.
+- **Live call transcript** — every typed and recognized message and every
+  Nova AI reply appear on screen in order, with clear "You" / "Nova AI" labels;
+  voice replies are shown too, and a duplicate recognition callback never
+  double-records a turn.
+- **Consented session records** — a simulated call can be stored locally (a
+  unique session id, start/end time, the transcript, detected intents, an
+  honest outcome — `resolved` / `unresolved` / `escalated` / `no_conversation`
+  — a concise summary, and a human-follow-up flag). **Recording is opt-in:**
+  with consent declined nothing is persisted and the call still works.
+- **Staff history view** — recent sessions with date, time, intent, outcome and
+  summary; the list deliberately omits the raw transcript.
 - **Order tracking** — status answers come only from the SQLite database.
 - **Sample FAQs** — shipping, returns, cancellation, changes, payment, answered
   verbatim from `data/faq.json` (fictional demonstration policies).
@@ -105,15 +116,16 @@ policy?”*, or *“Thank you”*.
 ## Run tests
 
 ```powershell
-.\.venv\Scripts\python.exe -m pytest        # 431 Python tests (fully offline)
-node tests/js/test_call_state.js            # 23 — voice-call state machine
-node tests/js/test_call_glue.js             # 14 — browser glue via a fake DOM
+.\.venv\Scripts\python.exe -m pytest        # 536 Python tests (fully offline)
+node tests/js/test_call_state.js            # 25 — voice-call state machine
+node tests/js/test_call_glue.js             # 22 — browser glue via a fake DOM
 ```
 
 The Python suite never makes a network call (Gemini is stubbed in every test)
 and each test runs against a throwaway database. The JS tests exercise the
-voice-call logic headlessly — **real microphone/audio behaviour still needs
-manual testing in Chrome/Edge.**
+voice-call logic headlessly against a mocked browser — **they do not verify a
+real microphone or speaker.** Real mic/audio behaviour still needs manual
+testing in Chrome/Edge (see below).
 
 ## Configuration
 
@@ -139,6 +151,10 @@ never committed) and have safe defaults — see [.env.example](.env.example).
 | `GET` | `/api/health` | Liveness → `{"status": "ok"}` |
 | `GET` | `/api/orders/<order_id>` | Order lookup from SQLite |
 | `POST` | `/api/chat` | Chat endpoint used by text chat **and** the voice call |
+| `POST` | `/api/session/start` | Open a **consented** simulated-call record (`{"consent": true, "channel": "voice"\|"text"}`); without consent returns `session_id: null` and stores nothing |
+| `POST` | `/api/session/<id>/end` | Close a session with its turns → sanitized transcript, intents, honest outcome + summary |
+| `GET` | `/api/sessions` | Staff history — metadata + summary only, no raw transcript |
+| `GET` | `/api/session/<id>` | One full consented session record, transcript included |
 
 `/api/chat` request/response:
 
@@ -155,8 +171,11 @@ never committed) and have safe defaults — see [.env.example](.env.example).
 ```
 
 `intent` is one of: `order_status`, `order_status_missing_id`,
-`order_status_unclear`, `faq`, `greeting`, `farewell`, `gratitude`,
-`ambiguous`, `empty`, `fallback` (an honest "I'm not sure" — never invented).
+`order_status_unclear`, `business_hours`, `faq`, `human_agent_request`,
+`greeting`, `farewell`, `gratitude`, `ambiguous`, `empty`, `fallback` (an
+honest "I'm not sure" — never invented). `human_agent_request` returns the
+honest handoff wording — it never claims a live transfer or that anyone was
+notified.
 
 <details>
 <summary>Errors and limits (Phase G3)</summary>
@@ -184,6 +203,14 @@ returns the friendly `intent: "empty"` contract with status 200.
   content, labelled in the UI and in each response's `source`; replace them
   before any real use.
 - **No real telephony** — browser voice simulation only, no PSTN integration.
+- **Human-agent transfer is simulated** — when a customer asks for a human, the
+  honest handoff reply is returned and the request is flagged "requires staff
+  follow-up" in the session record. **No real agent is notified or contacted
+  and no support phone number or email is invented.**
+- **Recording is consent-gated** — a transcript/session record is stored only
+  when the customer ticks the consent box (the server also requires a strict
+  `consent: true`). If consent is declined nothing is persisted and the call
+  still works. Records live in the local demo SQLite file only.
 - **Speech recognition is browser-dependent** — English speech works in
   Chrome/Edge; **spoken Urdu/Roman Urdu is unreliable or unavailable** (no
   Roman-Urdu speech model exists, and `ur-PK` voice packs are usually missing
@@ -220,6 +247,26 @@ or stored; neither flag is meant for real customers. Full behaviour notes:
 `static/js/call.js`.
 
 </details>
+
+## Manual testing (browser microphone / speaker)
+
+The automated JS suites run against a **mocked** browser and cannot prove real
+audio behaviour. To verify a simulated voice call for yourself:
+
+1. Start the server (`.\.venv\Scripts\python.exe run.py`) and open
+   **http://127.0.0.1:5000/** in **Chrome or Edge** (the Web Speech API needs a
+   secure/loopback origin and mic permission).
+2. In the call panel, allow the microphone when prompted. Speak after the
+   greeting; the Listening / Processing / Speaking states and the on-screen
+   transcript should update, and Nova's reply should be spoken.
+3. Toggle the **recording consent** checkbox: with it off, the status says the
+   call is not stored; with it on, ending the call adds a row to the **History**
+   section (date, time, intent, outcome, summary).
+4. Ask for a human agent to confirm the honest handoff reply and the
+   "requires staff follow-up" label — no real person is contacted.
+
+If your browser lacks speech recognition or synthesis, the call degrades to a
+working text-only session; that path is covered by the automated tests.
 
 ## Project structure
 

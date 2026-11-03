@@ -40,11 +40,26 @@ if (typeof TTS !== "undefined" && TTS.supported) {
   TTS.onChange(refreshSpeakButtons);
 }
 
-/** Add one bubble to the conversation log. */
+/** Add one bubble to the conversation log (the chat transcript, Task 4).
+ *
+ * Every line carries a visible speaker label ("You" / "Nova AI") above the
+ * text, so typed and mic-recognized messages read as a clear transcript.
+ * All text goes in through textContent - never innerHTML - so nothing the
+ * assistant or a speaker returns can inject markup.
+ */
 function addMessage(role, text) {
   const div = document.createElement("div");
   div.className = `msg ${role}`; // "user" or "bot"
-  div.textContent = text; // textContent (not innerHTML) avoids HTML injection
+
+  const roleEl = document.createElement("span");
+  roleEl.className = "msg-role";
+  roleEl.textContent = role === "user" ? "You" : "Nova AI";
+  div.appendChild(roleEl);
+
+  const bodyEl = document.createElement("span");
+  bodyEl.className = "msg-body";
+  bodyEl.textContent = text; // textContent (not innerHTML) avoids HTML injection
+  div.appendChild(bodyEl);
 
   // Assistant replies get a visible Speak button (only if the browser can
   // speak). It TOGGLES: if this reply is already speaking, clicking stops it;
