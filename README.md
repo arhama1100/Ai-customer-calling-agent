@@ -18,9 +18,11 @@ an answer.
 ## Contents
 
 [Overview](#overview) · [Features](#features) · [How it works](#how-it-works) ·
+[Voice call and session recording](#voice-call-and-session-recording) ·
 [Tech stack](#tech-stack) · [Quick start](#quick-start) ·
 [Run tests](#run-tests) · [Configuration](#configuration) ·
 [API reference](#api-reference) · [Limitations and security](#limitations-and-security) ·
+[Manual testing](#manual-testing-browser-microphone--speaker) ·
 [Project structure](#project-structure) · [Future improvements](#future-improvements) ·
 [License](#license)
 
@@ -77,6 +79,35 @@ Browser UI ──▶ Flask API ──▶ Assistant (intent router)
 
 Every reply carries a `source` field (e.g. `orders_db`, `faq_kb:returns:sample`,
 `fixed`, `none`), keeping the data lineage auditable.
+
+## Voice call and session recording
+
+The voice call is a **browser simulation**, not a telephone call. The pipeline
+(`static/js/stt.js`, `static/js/tts.js`, `static/js/call.js`) works like this:
+
+- **Voice input (STT)** — the browser's `SpeechRecognition` transcribes speech
+  into a customer turn. It requests the microphone permission, supports
+  `en-US` and `ur-PK` where the browser provides them, ignores empty or
+  whitespace-only results, and never submits a recognized turn twice. If
+  recognition is unsupported, denied, or errors out, the UI says so and
+  **typing remains a full fallback**.
+- **Assistant** — the recognized (or typed) text is sent to the same
+  `/api/chat` endpoint that text chat uses; the reply is the deterministic,
+  grounded answer described above.
+- **Voice output (TTS)** — `speechSynthesis` speaks Nova's reply without
+  overlapping prior speech, and stops when the call ends. Browsers without
+  `speechSynthesis` still see every reply in the on-screen transcript.
+- **Call states** — the controller shows clear **Listening / Processing /
+  Speaking** states and keeps only one recognition session active at a time.
+
+When a call ends, a session **record** can be saved. The transcript and the
+record are created only after the customer ticks the consent box (the server
+additionally requires a strict `consent: true`); the stored record holds the
+turn-by-turn transcript, detected intents, an honest outcome
+(`resolved` / `unresolved` / `escalated` / `no_conversation`), a concise
+summary, and a human-follow-up flag. Nothing is stored without consent. All
+records live in the local demo SQLite database (`data/shop.db`) — no external
+storage, no real telephony, and no live human transfer.
 
 ## Tech stack
 
@@ -271,13 +302,17 @@ working text-only session; that path is covered by the automated tests.
 ## Project structure
 
 ```
-app/        Flask backend (assistant, routes, orders, FAQ, Gemini, config)
-static/     Frontend — index.html, css/, js/ (app.js, stt.js, tts.js, call.js)
+app/        Flask backend (assistant, routes, orders, sessions, FAQ, Gemini, config)
+static/     Frontend — index.html, css/, js/ (app.js, stt.js, tts.js, call.js, sessions.js)
 data/       faq.json (fictional sample policies) + generated shop.db (not tracked)
 tests/      pytest suite + js/ (headless Node tests for the voice call)
 docs/       FAQ owner-questions worksheet for collecting real policies
 run.py      Local dev server launcher
 ```
+
+Session records are handled by `app/sessions.py` (schema, honest outcome and
+summary derivation, consent gating) exposed through the four `/api/session*`
+endpoints, and rendered in the staff History panel by `static/js/sessions.js`.
 
 ## Future improvements
 
