@@ -10,7 +10,7 @@ Routing rules (checked in order):
     optional model. A mixed request ("...about order ORD-1001") still goes to
     the handoff so the human ask is never silently dropped; the handoff reply
     itself invites the customer to ask Nova the concrete question directly.
-1. Contains an order id (e.g. ORD-1002)  -> answer from SQLite (orders.py)
+1. Contains an order id (e.g. ORD-1002)  -> answer from PostgreSQL (orders.py)
 1b. Business-hours question (English / Roman Urdu / Urdu script) -> the SAMPLE
     schedule from data/faq.json, resolved BEFORE the optional model so the
     answer is identical with Gemini on or off, and the model is never asked
@@ -36,7 +36,7 @@ Routing rules (checked in order):
 6. Nothing matched                       -> honest fallback (never invents)
 
 Hard rules: this module NEVER fabricates an order status or a policy. Order
-facts come ONLY from SQLite. Policy answers come ONLY from data/faq.json, which
+facts come ONLY from PostgreSQL. Policy answers come ONLY from data/faq.json, which
 holds FICTIONAL SAMPLE policies (demonstration data, not an approved real shop
 policy). The optional Gemini layer may only CLASSIFY intent and rephrase our
 OWN approved sample text - it can never invent facts.
@@ -78,7 +78,7 @@ ORDER_ID_REPEAT_REPLY = (
 # A message is treated as an ORDER-STATUS request only when it references the
 # customer's OWN order/parcel (ORDER_REF_TOKENS) AND carries a status/arrival
 # cue (ORDER_STATUS_CUES) AND is not actually a POLICY request (see
-# POLICY_ACTION_TOKENS). Order ids are matched earlier and hit SQLite.
+# POLICY_ACTION_TOKENS). Order ids are matched earlier and hit PostgreSQL.
 ORDER_REF_TOKENS = {
     "order", "orders", "parcel", "package", "shipment", "consignment",
     "tracking",
@@ -708,7 +708,7 @@ def _resolve_order_id(text):
     """Decide whether a message names a specific order, and which canonical id.
 
     Returns one of:
-      ("ORD-####", "found")    - a confident id: hand to the SQLite lookup.
+      ("ORD-####", "found")    - a confident id: hand to the database lookup.
       (None, "uncertain")      - an order number was clearly given but did not
                                  resolve to a complete id -> ask to repeat.
       (None, "none")           - no order-number signal; continue normal routing.
@@ -805,7 +805,7 @@ def _model_order_id_is_verifiable(order_id, text):
     model's word alone. The digits are re-checked against the customer's OWN
     message using the same number normalization as the spoken-number path, so
     "one zero zero two" and "1002" both count as stated. Anything else is
-    discarded and we ask the customer for their number instead - SQLite stays the
+    discarded and we ask the customer for their number instead - PostgreSQL stays the
     only source of order facts.
     """
     if not order_id:
@@ -831,7 +831,7 @@ def _respond_via_gemini(text, db_path=None):
                     the final step can ask a clarifying question when the model
                     said the message was too vague, instead of shrugging.
 
-    Order ids were already handled by the reliable rules + SQLite lookup above,
+    Order ids were already handled by the reliable rules + database lookup above,
     so an `order_status` intent here usually means no id was resolved: we ask for
     it. A model-claimed id is used only when the customer's own words contain it
     (see _model_order_id_is_verifiable). Policies are answered from the SAMPLE
@@ -858,7 +858,7 @@ def _respond_via_gemini(text, db_path=None):
             classification.get("order_id"), text)
         if verified:
             # The model only pointed at a number the customer already said; the
-            # status itself still comes straight from SQLite.
+            # status itself still comes straight from PostgreSQL.
             return {
                 "intent": "order_status",
                 "reply": describe_order(verified, db_path),
@@ -921,7 +921,7 @@ def respond(text, db_path=None, faq_path=None):
 
     # 1) Order status — highest priority when an order id is present. This also
     #    resolves a SPOKEN order number ("one zero zero two", "order number
-    #    1002") into the canonical ORD-#### form; the SQLite lookup itself is
+    #    1002") into the canonical ORD-#### form; the database lookup itself is
     #    unchanged. An unclear/partial number asks the customer to repeat it
     #    instead of inventing an id (see _resolve_order_id).
     order_id, order_status = _resolve_order_id(text)
@@ -956,7 +956,7 @@ def respond(text, db_path=None, faq_path=None):
     # 2) OPTIONAL Gemini branch - understand free-form / multilingual phrasing.
     #    Only runs when the feature is enabled and a key exists; it may only
     #    classify intent + language and rephrase our OWN fixed messages. Order
-    #    facts already came from SQLite above, and unapproved FAQ placeholders
+    #    facts already came from PostgreSQL above, and unapproved FAQ placeholders
     #    are never quoted (see _respond_via_gemini). On ANY failure this returns
     #    None and we fall through to the deterministic assistant below, without
     #    ever pretending Gemini answered.

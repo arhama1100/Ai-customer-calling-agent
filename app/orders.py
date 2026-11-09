@@ -5,7 +5,7 @@ Read-only queries over the orders table. This is the ONLY place order
 information is turned into answers.
 
 Design rule:
-- Functions here return data strictly as stored in SQLite.
+- Functions here return data strictly as stored in PostgreSQL.
 - They never guess: unknown order id => None (and the caller says so honestly).
 """
 
@@ -22,7 +22,7 @@ def find_order(order_id, db_path=None):
     conn = get_connection(db_path)
     try:
         row = conn.execute(
-            "SELECT * FROM orders WHERE upper(order_id) = upper(?)",
+            "SELECT * FROM orders WHERE upper(order_id) = upper(%s)",
             (order_id.strip(),),
         ).fetchone()
     finally:
@@ -30,7 +30,7 @@ def find_order(order_id, db_path=None):
 
     if row is None:
         return None
-    return dict(row)  # sqlite3.Row -> ordinary dict
+    return dict(row)  # dict row (PostgreSQL) or sqlite3.Row (test adapter)
 
 
 def describe_order(order_id, db_path=None):

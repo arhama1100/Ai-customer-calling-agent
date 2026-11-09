@@ -67,7 +67,7 @@ def health():
 
 @api_bp.get("/orders/<order_id>")
 def get_order(order_id):
-    """Look up one fictional shop order by its id in SQLite.
+    """Look up one fictional shop order by its id in the database.
 
     The answer comes ONLY from the database — this endpoint never guesses.
     Found   -> 200 with the order rows's fields as JSON.
@@ -77,7 +77,7 @@ def get_order(order_id):
     if limited is not None:
         return limited
 
-    # DB_PATH lives in app config, so tests can point at a temporary database.
+    # DB_PATH is explicitly set only by tests for their isolated SQLite adapter.
     db_path = current_app.config["DB_PATH"]
     try:
         order = find_order(order_id, db_path)
@@ -85,7 +85,7 @@ def get_order(order_id):
         # The DB is unavailable or corrupted: log server-side (never to the
         # customer) and return a safe, stable JSON error - no traceback, no
         # file path, no internal detail (G3.2).
-        current_app.logger.exception("Order lookup failed")
+        current_app.logger.error("Order lookup failed")
         return (
             jsonify(
                 error="storage_error",
@@ -116,7 +116,7 @@ def chat():
 
     Expects JSON: {"message": "where is my order ORD-1002?"}
     The reply is produced by the DETERMINISTIC assistant, which only uses the
-    SQLite orders and the sample FAQ. Returns:
+    PostgreSQL orders and the sample FAQ. Returns:
         {"intent": ..., "reply": ..., "source": ...}
     """
     limited = _rate_limit_response()
@@ -173,7 +173,7 @@ def chat():
 
 def _storage_error():
     """The one safe 500 answer shared by all session endpoints."""
-    current_app.logger.exception("Call-session storage failed")
+    current_app.logger.error("Call-session storage failed")
     return (
         jsonify(
             error="storage_error",

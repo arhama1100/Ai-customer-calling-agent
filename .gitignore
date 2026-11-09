@@ -9,6 +9,9 @@
 *.sqlite
 *.sqlite3
 
+# ── Vercel static asset build output (copied from static/ by build.py) ──
+public/static/
+
 # ── Python build / cache artifacts ──
 __pycache__/
 *.pyc

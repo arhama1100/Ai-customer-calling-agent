@@ -9,6 +9,8 @@ Why an app FACTORY function (create_app) instead of one global app object?
 - It avoids messy global state and import cycles.
 """
 
+import os
+
 from flask import Flask, jsonify, request, send_from_directory
 from werkzeug.exceptions import HTTPException
 
@@ -77,7 +79,7 @@ def _register_error_handlers(app):
             return _http_error(exc)
         # Real, unexpected failure: log it for the operator, tell the customer
         # nothing but a safe, generic message (no leak of internals).
-        app.logger.exception("Unhandled application error")
+        app.logger.error("Unhandled application error (%s)", type(exc).__name__)
         return (
             jsonify(
                 error="internal_error",
@@ -95,11 +97,16 @@ def create_app(config_class=Config):
     """
     # Point Flask's static file handling at our project-root "static/" folder
     # (the plain HTML/CSS/JS frontend added in Phase 4).
-    static_dir = str(BASE_DIR / "static")
+    on_vercel = bool(os.getenv("VERCEL"))
+    static_dir = str(
+        BASE_DIR / "public" / "static" if on_vercel else BASE_DIR / "static"
+    )
     app = Flask(
         __name__,
-        static_folder=static_dir,
-        static_url_path="/static",
+        # Vercel serves public/** through its CDN. Flask still sends index.html
+        # from the built public directory, while local runs use Flask static.
+        static_folder=None if on_vercel else static_dir,
+        static_url_path=None if on_vercel else "/static",
     )
 
     # Load settings (PORT, DEBUG, GEMINI_ENABLED, ...) from the config class.

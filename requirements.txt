@@ -1,6 +1,7 @@
 flask
 python-dotenv
 pytest
+psycopg[binary,pool]>=3.2,<4
 
 # Official Gemini SDK (OPTIONAL feature, disabled by default). Installed in the
 # project venv and verified to import on Python 3.14; used only when

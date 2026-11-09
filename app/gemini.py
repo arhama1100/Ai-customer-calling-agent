@@ -12,7 +12,7 @@ Design goals / hard rules
   key is missing, NO network call is made and callers receive ``None``.
 - Never a source of truth. This wrapper only CLASSIFIES intent/language and
   REPHRASES text that the app has already approved. Real facts (order status,
-  policy wording) come from SQLite and ``data/faq.json``. Later phases ground
+  policy wording) come from PostgreSQL and ``data/faq.json``. Later phases ground
   on those; they must never let this module fabricate an answer.
 - Secrets. ``GEMINI_API_KEY`` is read from the environment at call time and is
   NEVER hardcoded, printed, logged, returned, or stored on an object.
@@ -241,7 +241,7 @@ def rephrase_to_language(approved_text, language):
     """Rephrase ALREADY-APPROVED text into the customer's language.
 
     This only re-words text the app has already produced from an approved
-    source (SQLite status or FAQ policy). It is instructed to keep every fact
+    source (PostgreSQL status or FAQ policy). It is instructed to keep every fact
     identical — no added/removed/changed status, date, price, or approval.
     Returns the rephrased string, or ``None`` when disabled/failing (the
     caller then uses the original approved text unchanged).

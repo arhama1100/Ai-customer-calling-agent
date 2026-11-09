@@ -2,7 +2,7 @@
 
 A customer-service demo agent for a **fictional** shop: customers type or
 speak, and the assistant answers only from local, deterministic sources —
-order status from SQLite and policies from a sample FAQ file — never inventing
+order status from PostgreSQL and policies from a sample FAQ file — never inventing
 an answer.
 
 ![Python](https://img.shields.io/badge/python-3.x-blue)
@@ -28,7 +28,7 @@ an answer.
 
 ## Overview
 
-A Flask + SQLite backend serves a plain HTML/CSS/JS frontend where a virtual
+A Flask + Neon PostgreSQL backend serves a plain HTML/CSS/JS frontend where a virtual
 shop assistant tracks orders and answers policy questions. The same
 `/api/chat` endpoint powers both text chat and a browser voice-call mode
 (speech recognition + synthesis via the Web Speech API). An optional Gemini
@@ -52,7 +52,7 @@ shop data, policies, and sample numbers are fictional demonstration content.
   with consent declined nothing is persisted and the call still works.
 - **Staff history view** — recent sessions with date, time, intent, outcome and
   summary; the list deliberately omits the raw transcript.
-- **Order tracking** — status answers come only from the SQLite database.
+- **Order tracking** — status answers come only from the PostgreSQL database.
 - **Sample FAQs** — shipping, returns, cancellation, changes, payment, answered
   verbatim from `data/faq.json` (fictional demonstration policies).
 - **Multilingual typed input** — English, Urdu script, and Roman Urdu;
@@ -69,7 +69,7 @@ shop data, policies, and sample numbers are fictional demonstration content.
 Browser UI ──▶ Flask API ──▶ Assistant (intent router)
 (text chat +                  │
  voice call ── same ──────────┤
- /api/chat ──────────────────▶├── order id ─────▶ SQLite (source of truth)
+ /api/chat ──────────────────▶├── order id ─────▶ PostgreSQL (source of truth)
                               ├── policy topic ──▶ sample FAQ (data/faq.json)
                               ├── greeting / farewell / gratitude / fallback
                               └── (optional) Gemini: classify + rephrase only
@@ -106,15 +106,17 @@ additionally requires a strict `consent: true`); the stored record holds the
 turn-by-turn transcript, detected intents, an honest outcome
 (`resolved` / `unresolved` / `escalated` / `no_conversation`), a concise
 summary, and a human-follow-up flag. Nothing is stored without consent. All
-records live in the local demo SQLite database (`data/shop.db`) — no external
-storage, no real telephony, and no live human transfer.
+records live in Neon PostgreSQL in deployed use. The legacy local SQLite file
+can be migrated with the included utility. There is no real telephony or live
+human transfer.
 
 ## Tech stack
 
 | Layer | Choice |
 |---|---|
 | Backend | Python + Flask (app-factory pattern) |
-| Database | SQLite (built-in `sqlite3`) |
+| Database | Neon PostgreSQL via Psycopg 3 and a bounded connection pool |
+| Hosting | Vercel Python Function; static assets served from its CDN |
 | Frontend | Plain HTML / CSS / JS — no framework, no build step |
 | Speech | Browser Web Speech API (`SpeechRecognition` + `speechSynthesis`) |
 | Optional NLP | Gemini via `google-genai`, off by default (`GEMINI_ENABLED=false`) |
@@ -130,7 +132,8 @@ Prerequisites: **Python 3.x** (developed on 3.14) and a modern browser —
 py -m venv .venv
 .\.venv\Scripts\pip.exe install -r requirements.txt
 
-# First run only: create the local database with fictional sample orders
+# Optional for a new demo database: this inserts six fictional orders.
+# It is a manual step; the app never seeds data automatically.
 .\.venv\Scripts\python.exe -m app.seed
 
 # Start the server (binds to 127.0.0.1:5000)
@@ -138,8 +141,8 @@ py -m venv .venv
 ```
 
 Open **http://127.0.0.1:5000/** — health check at `/api/health` returns
-`{"status": "ok"}`. A `.env` file is optional; all defaults work without it
-(see [Configuration](#configuration)).
+`{"status": "ok"}`. Database-backed features require `DATABASE_URL` in the
+process environment (see [Configuration](#configuration)).
 
 Try it: ask *“What is the status of order ORD-1002?”*, *“What is your return
 policy?”*, or *“Thank you”*.
@@ -147,9 +150,9 @@ policy?”*, or *“Thank you”*.
 ## Run tests
 
 ```powershell
-.\.venv\Scripts\python.exe -m pytest        # 536 Python tests (fully offline)
-node tests/js/test_call_state.js            # 25 — voice-call state machine
-node tests/js/test_call_glue.js             # 22 — browser glue via a fake DOM
+.\.venv\Scripts\python.exe -m pytest        # fully offline; SQLite test adapter
+node tests/js/test_call_state.js             # voice-call state machine
+node tests/js/test_call_glue.js              # browser glue via a fake DOM
 ```
 
 The Python suite never makes a network call (Gemini is stubbed in every test)
@@ -160,12 +163,28 @@ testing in Chrome/Edge (see below).
 
 ## Configuration
 
-All settings come from environment variables (optionally via a local `.env`,
-never committed) and have safe defaults — see [.env.example](.env.example).
+Settings come from environment variables; see [.env.example](.env.example) for
+placeholders. For local development, python-dotenv loads `.env` if present;
+Vercel supplies variables through Project Settings. Set `DATABASE_URL` in your
+shell locally or in Vercel's Environment Variables for deployed use.
+In PowerShell, for the current terminal session, use `$env:DATABASE_URL = "<Neon pooled URL>"`.
+
+- **Neon:** create a PostgreSQL project and use its pooled connection string
+  (the hostname contains `-pooler`). Set it as `DATABASE_URL`; SSL is required
+  by the application. Never commit the real URL.
+- **Migration:** install dependencies, set `DATABASE_URL`, then run
+  `\.venv\Scripts\python.exe scripts\migrate_sqlite_to_neon.py`. It reads
+  `data/shop.db` in read-only mode, copies both tables in one transaction,
+  avoids replacing existing destination rows, and verifies every column and
+  row count before declaring success. It never deletes the source file.
+- **Schema/sample data:** `python -m app.seed` initializes both tables and
+  upserts the six fictional orders; it does not run automatically at app
+  startup. Do not run it against production unless those demo orders are
+  wanted there.
 
 - **Gemini (optional, off by default):** to enable free-form phrasing and reply
-  translation, copy `.env.example` to `.env`, set `GEMINI_ENABLED=true` and put
-  your key in `GEMINI_API_KEY` — locally only. The key is read from the
+  translation, set `GEMINI_ENABLED=true` and `GEMINI_API_KEY` in your process
+  environment locally or in the hosting provider. The key is read from the
   environment at runtime and is never logged, committed, or sent to the
   frontend. With the flag off, the deterministic assistant handles everything
   and no external call is made.
@@ -180,7 +199,7 @@ never committed) and have safe defaults — see [.env.example](.env.example).
 |---|---|---|
 | `GET` | `/` | Chat frontend |
 | `GET` | `/api/health` | Liveness → `{"status": "ok"}` |
-| `GET` | `/api/orders/<order_id>` | Order lookup from SQLite |
+| `GET` | `/api/orders/<order_id>` | Order lookup from PostgreSQL |
 | `POST` | `/api/chat` | Chat endpoint used by text chat **and** the voice call |
 | `POST` | `/api/session/start` | Open a **consented** simulated-call record (`{"consent": true, "channel": "voice"\|"text"}`); without consent returns `session_id: null` and stores nothing |
 | `POST` | `/api/session/<id>/end` | Close a session with its turns → sanitized transcript, intents, honest outcome + summary |
@@ -220,7 +239,7 @@ stack traces or secrets, ever.
 | Body larger than `MAX_CONTENT_LENGTH` | 413 | `payload_too_large` |
 | Over the per-client rate limit | 429 | `rate_limited` (+ `Retry-After`) |
 | Wrong method / unmatched `/api` route | 405 / 404 | `method_not_allowed` / `not_found` |
-| SQLite lookup fails | 500 | `storage_error` |
+| PostgreSQL lookup fails | 500 | `storage_error` |
 | Any other server error | 500 | `internal_error` |
 
 An empty, missing, or malformed message is deliberately *not* an error: it
@@ -241,7 +260,7 @@ returns the friendly `intent: "empty"` contract with status 200.
 - **Recording is consent-gated** — a transcript/session record is stored only
   when the customer ticks the consent box (the server also requires a strict
   `consent: true`). If consent is declined nothing is persisted and the call
-  still works. Records live in the local demo SQLite file only.
+  still works. Records live in Neon PostgreSQL in deployed use.
 - **Speech recognition is browser-dependent** — English speech works in
   Chrome/Edge; **spoken Urdu/Roman Urdu is unreliable or unavailable** (no
   Roman-Urdu speech model exists, and `ur-PK` voice packs are usually missing
@@ -262,8 +281,8 @@ returns the friendly `intent: "empty"` contract with status 200.
 | Transport | Plain HTTP on `127.0.0.1` | HTTPS (also required by the Web Speech API) |
 | Server | Flask dev server | WSGI server behind a reverse proxy |
 | Auth / PII | None; `/api/orders/<id>` returns the stored row and ids are sequential | Auth + per-customer ownership checks; redact `customer_name`; non-enumerable ids |
-| Rate limiting | In-memory, per-process | Shared store (e.g. Redis), Gemini budget caps |
-| Persistence | Single-file SQLite, parameterized queries | Managed, backed-up database |
+| Rate limiting | In-memory, per-process; resets on restart and is not shared across Vercel instances | Shared persistent store (e.g. Redis/Upstash), Gemini budget caps |
+| Persistence | Neon PostgreSQL with parameterized queries | Backups, monitoring, and migration rehearsal |
 
 </details>
 
@@ -304,15 +323,46 @@ working text-only session; that path is covered by the automated tests.
 ```
 app/        Flask backend (assistant, routes, orders, sessions, FAQ, Gemini, config)
 static/     Frontend — index.html, css/, js/ (app.js, stt.js, tts.js, call.js, sessions.js)
-data/       faq.json (fictional sample policies) + generated shop.db (not tracked)
+data/       faq.json (unchanged sample policies) + legacy shop.db migration source (ignored)
 tests/      pytest suite + js/ (headless Node tests for the voice call)
 docs/       FAQ owner-questions worksheet for collecting real policies
 run.py      Local dev server launcher
+index.py    Vercel WSGI entry point
+scripts/    PostgreSQL schema setup and SQLite-to-Neon migration commands
 ```
 
 Session records are handled by `app/sessions.py` (schema, honest outcome and
 summary derivation, consent gating) exposed through the four `/api/session*`
 endpoints, and rendered in the staff History panel by `static/js/sessions.js`.
+
+## Vercel deployment
+
+Vercel detects the WSGI app exposed by the root index.py entry point. Its build
+step runs build.py, which copies the existing static frontend into public/static
+for Vercel's CDN. No database connection or sample-data seed runs at startup.
+
+1. Create a Neon PostgreSQL project and copy its pooled connection string from
+   the Neon dashboard. Use the hostname containing -pooler and keep SSL enabled.
+2. Import this repository as a Vercel project. Vercel detects Flask and reads
+   requirements.txt plus pyproject.toml.
+3. In Vercel Project Settings → Environment Variables, add DATABASE_URL for
+   Preview and Production (and Development if you use Vercel CLI). Paste the
+   Neon pooled URL directly into Vercel; never commit it.
+4. To migrate existing local data, set DATABASE_URL in your local shell and run
+   scripts/migrate_sqlite_to_neon.py from the project root. The utility reads
+   data/shop.db read-only and reports exact verified row counts for orders and
+   call_sessions. A second run is safe and also checks every copied field.
+5. For a new empty Neon database instead, run scripts/init_postgres.py. This
+   creates the schema but inserts no orders. Seed fictional orders manually
+   only when you explicitly want demo data.
+6. Redeploy on Vercel after setting its variable. Check /api/health and test an
+   order lookup and session flow. The live Neon migration/connectivity check
+   must be completed with your Neon URL; the offline test suite cannot prove
+   access to your cloud database.
+
+The limiter remains in memory, so Vercel instances do not share counts and
+counts reset when an instance restarts. For production throttling, use a shared
+persistent service such as Upstash Redis.
 
 ## Future improvements
 

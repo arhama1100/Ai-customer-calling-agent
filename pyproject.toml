@@ -1,0 +1,13 @@
+[project]
+name = "ai-customer-calling-agent"
+version = "1.0.0"
+requires-python = ">=3.12,<3.15"
+dependencies = [
+    "Flask",
+    "python-dotenv",
+    "psycopg[binary,pool]>=3.2,<4",
+    "google-genai",
+]
+
+[tool.vercel.scripts]
+build = "python build.py"

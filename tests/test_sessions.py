@@ -9,6 +9,7 @@ client fixtures); no network, no Gemini, no real calls, no real people.
 """
 
 import json
+from concurrent.futures import ThreadPoolExecutor
 
 import pytest
 
@@ -417,3 +418,16 @@ def test_api_database_error_is_a_safe_json_500(client, app, tmp_path):
     # Safe leak test: no path, no traceback wording in the customer answer.
     assert "Traceback" not in body["message"]
     assert str(bogus_dir) not in body["message"]
+
+
+def test_concurrent_session_creation_uses_independent_connections(db_path):
+    from app.sessions import list_sessions, start_session
+
+    def create_one(_):
+        return start_session(db_path=db_path, channel="voice", consent=True)["session_id"]
+
+    with ThreadPoolExecutor(max_workers=8) as executor:
+        session_ids = list(executor.map(create_one, range(24)))
+
+    assert len(set(session_ids)) == 24
+    assert len(list_sessions(db_path=db_path, limit=100)) == 24

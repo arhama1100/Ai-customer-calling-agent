@@ -14,6 +14,11 @@ Two fixtures are defined:
 - client -> a test client that can call our API without starting a real server
 """
 
+import os
+
+# Never inspect a developer's .env as part of the offline automated suite.
+os.environ["PYTHON_DOTENV_DISABLED"] = "1"
+
 import pytest
 
 from app import create_app
