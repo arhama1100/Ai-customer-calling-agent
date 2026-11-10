@@ -43,8 +43,8 @@ def test_root_serves_frontend_page(client):
     assert "/static/js/stt.js" in page
 
 
-def test_vercel_homepage_uses_tracked_html_and_keeps_asset_urls(monkeypatch):
-    """Vercel's function serves tracked HTML; CDN serves generated assets."""
+def test_vercel_homepage_and_static_asset_fallback(monkeypatch):
+    """The Vercel-mode Flask fallback serves tracked files with MIME types."""
     from app import create_app
 
     monkeypatch.setenv("VERCEL", "1")
@@ -59,9 +59,21 @@ def test_vercel_homepage_uses_tracked_html_and_keeps_asset_urls(monkeypatch):
     for script in ("tts.js", "stt.js", "app.js", "call.js", "sessions.js", "nova.js"):
         assert f'src="/static/js/{script}"' in page
 
-    # Static assets are intentionally served by Vercel's CDN, not Flask.
-    assert client.get("/static/css/style.css").status_code == 404
-    assert client.get("/static/js/app.js").status_code == 404
+    # The Flask test client exercises the fallback used when a generated
+    # public/static asset is missing from a deployment.
+    assets = {
+        "/static/css/style.css": "text/css",
+        "/static/js/tts.js": "text/javascript",
+        "/static/js/stt.js": "text/javascript",
+        "/static/js/app.js": "text/javascript",
+        "/static/js/call.js": "text/javascript",
+        "/static/js/sessions.js": "text/javascript",
+        "/static/js/nova.js": "text/javascript",
+    }
+    for path, expected_mimetype in assets.items():
+        asset = client.get(path)
+        assert asset.status_code == 200, path
+        assert asset.mimetype == expected_mimetype, path
 
     # Flask API routing remains active under the Vercel runtime setting.
     health = client.get("/api/health")

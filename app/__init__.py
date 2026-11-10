@@ -127,4 +127,15 @@ def create_app(config_class=Config):
     def index():
         return send_from_directory(homepage_dir, "index.html")
 
+    if on_vercel:
+        @app.get("/static/<path:filename>")
+        def vercel_static_fallback(filename):
+            """Serve source assets if a generated Vercel CDN file is absent.
+
+            Existing files in public/static remain CDN-served. If a deployment
+            is missing one of those generated files, this route keeps the same
+            URL working from the tracked static/ directory.
+            """
+            return send_from_directory(str(BASE_DIR / "static"), filename)
+
     return app
