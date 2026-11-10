@@ -1,7 +1,8 @@
 {
   "$schema": "https://openapi.vercel.sh/vercel.json",
+  "framework": "flask",
   "functions": {
-    "api/index.py": {
+    "index.py": {
       "maxDuration": 30,
       "excludeFiles": "{tests/**,docs/**,scripts/**,**/__pycache__/**,data/*.db}"
     }
