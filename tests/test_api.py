@@ -43,6 +43,32 @@ def test_root_serves_frontend_page(client):
     assert "/static/js/stt.js" in page
 
 
+def test_vercel_homepage_uses_tracked_html_and_keeps_asset_urls(monkeypatch):
+    """Vercel's function serves tracked HTML; CDN serves generated assets."""
+    from app import create_app
+
+    monkeypatch.setenv("VERCEL", "1")
+    app = create_app()
+    client = app.test_client()
+
+    response = client.get("/")
+    assert response.status_code == 200
+    page = response.get_data(as_text=True)
+    assert "Nova AI" in page
+    assert 'href="/static/css/style.css"' in page
+    for script in ("tts.js", "stt.js", "app.js", "call.js", "sessions.js", "nova.js"):
+        assert f'src="/static/js/{script}"' in page
+
+    # Static assets are intentionally served by Vercel's CDN, not Flask.
+    assert client.get("/static/css/style.css").status_code == 404
+    assert client.get("/static/js/app.js").status_code == 404
+
+    # Flask API routing remains active under the Vercel runtime setting.
+    health = client.get("/api/health")
+    assert health.status_code == 200
+    assert health.get_json()["status"] == "ok"
+
+
 def test_static_assets_are_served(client):
     for path in [
         "/static/css/style.css",

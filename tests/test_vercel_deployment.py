@@ -4,9 +4,11 @@ import app as app_package
 
 
 def test_vercel_app_serves_root_and_api_from_the_flask_app(tmp_path, monkeypatch):
-    static_dir = tmp_path / "public" / "static"
-    static_dir.mkdir(parents=True)
-    (static_dir / "index.html").write_text("<main>Vercel frontend</main>", encoding="utf-8")
+    source_static_dir = tmp_path / "static"
+    source_static_dir.mkdir(parents=True)
+    (source_static_dir / "index.html").write_text(
+        "<main>Vercel frontend</main>", encoding="utf-8"
+    )
 
     monkeypatch.setenv("VERCEL", "1")
     monkeypatch.setattr(app_package, "BASE_DIR", tmp_path)

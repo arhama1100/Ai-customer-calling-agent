@@ -101,10 +101,14 @@ def create_app(config_class=Config):
     static_dir = str(
         BASE_DIR / "public" / "static" if on_vercel else BASE_DIR / "static"
     )
+    # Vercel serves public/** through its CDN, but that generated directory is
+    # not guaranteed to be included in the Python function bundle. Read the
+    # homepage from its tracked source; its /static/... assets remain CDN files.
+    homepage_dir = str(BASE_DIR / "static")
     app = Flask(
         __name__,
-        # Vercel serves public/** through its CDN. Flask still sends index.html
-        # from the built public directory, while local runs use Flask static.
+        # Vercel serves public/** through its CDN. Flask only serves the
+        # homepage there; local runs use Flask for both the page and assets.
         static_folder=None if on_vercel else static_dir,
         static_url_path=None if on_vercel else "/static",
     )
@@ -121,6 +125,6 @@ def create_app(config_class=Config):
     # Serve the single-page frontend at the site root ("/").
     @app.get("/")
     def index():
-        return send_from_directory(static_dir, "index.html")
+        return send_from_directory(homepage_dir, "index.html")
 
     return app
